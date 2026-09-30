@@ -1,0 +1,30 @@
+[package]
+name = "cce-vault"
+version = "0.1.0"
+edition = "2021"
+description = "The notes vault shared by cce apps: Obsidian-compatible Markdown parsing, link index, watcher, search and writes"
+
+[lib]
+name = "cce_vault"
+path = "src/lib.rs"
+
+[[bin]]
+name = "cce-vault"
+path = "src/main.rs"
+
+
+[dependencies]
+chrono = "0.4.45"
+indexmap = { version = "2", features = ["serde"] }
+kdl = "4.6"
+log = "0.4"
+notify = "8.2"
+percent-encoding = "2"
+pulldown-cmark = { version = "0.13.4", default-features = false }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = { version = "1.0.151", features = ["raw_value"] }
+walkdir = "2.5"
+yaml-rust2 = "0.13.0"
+
+[dev-dependencies]
+tempfile = "3"
