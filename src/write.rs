@@ -133,6 +133,20 @@ impl Index {
         Ok(rel)
     }
 
+    /// A file's current text, read from disk (not from the index).
+    pub fn read_text(&self, path: &str) -> io::Result<String> {
+        read_text(&self.abs(path))
+    }
+
+    /// Replace a note's whole text — an editor's save. Creates the file
+    /// (and its folders) when it does not exist yet.
+    pub fn write_text(&mut self, path: &str, text: &str) -> Result<(), WriteError> {
+        let rel = check_new_path(path)?;
+        atomic_write(&self.abs(&rel), text.as_bytes())?;
+        self.refresh(&[rel]);
+        Ok(())
+    }
+
     /// Append a paragraph to a note, creating the note if it is missing.
     pub fn append(&mut self, path: &str, text: &str) -> Result<(), WriteError> {
         let rel = check_new_path(path)?;
@@ -582,6 +596,9 @@ mod tests {
         assert!(matches!(ix.create("new/n.md", ""), Err(WriteError::Exists(_))));
         ix.append("new/N.md", "more").unwrap();
         assert_eq!(read(&dir, "new/N.md"), "hello [[T]]\nmore\n");
+        ix.write_text("new/N.md", "replaced").unwrap();
+        assert_eq!(ix.read_text("new/N.md").unwrap(), "replaced");
+        assert!(ix.backlinks("T.md").is_empty());
         // No temp files left behind.
         let stray: Vec<_> = std::fs::read_dir(dir.path().join("new")).unwrap().flatten()
             .filter(|e| e.file_name().to_string_lossy().starts_with('.')).collect();

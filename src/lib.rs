@@ -13,6 +13,7 @@
 //! - [`write`]: atomic writes, task toggling, and rename with link rewrite.
 //! - [`canvas`]: JSON Canvas read and write, byte-exact with Obsidian.
 //! - [`daily`]: daily notes from Obsidian's own settings and templates.
+//! - [`markdown`]: a note as styled blocks and spans, for reading views.
 //! - [`config`]: where the vault is (`CCE_VAULT`, or `vault { path }` in
 //!   `~/.config/cce/config.kdl`).
 //!
@@ -34,6 +35,7 @@ pub mod canvas;
 pub mod config;
 pub mod daily;
 pub mod index;
+pub mod markdown;
 pub mod parse;
 pub mod search;
 pub mod watch;
