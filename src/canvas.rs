@@ -55,7 +55,17 @@ impl<'de> Deserialize<'de> for Object {
     }
 }
 
+impl Default for Object {
+    fn default() -> Object {
+        Object::new()
+    }
+}
+
 impl Object {
+    pub fn new() -> Object {
+        Object(Vec::new())
+    }
+
     fn raw(&self, key: &str) -> Option<&RawValue> {
         self.0.iter().find(|(k, _)| k == key).map(|(_, v)| &**v)
     }
@@ -72,6 +82,34 @@ impl Object {
             Some((_, v)) => *v = raw,
             None => self.0.push((key.to_string(), raw)),
         }
+    }
+
+    /// A number field's value.
+    pub fn num(&self, key: &str) -> Option<f64> {
+        serde_json::from_str::<f64>(self.raw(key)?.get()).ok()
+    }
+
+    /// Set a number field, written as an integer when it is whole (as
+    /// Obsidian writes coordinates). A value equal to the one there is left
+    /// alone, so an untouched field keeps its original formatting.
+    pub fn set_num(&mut self, key: &str, value: f64) {
+        if !value.is_finite() || self.num(key) == Some(value) {
+            return;
+        }
+        let text = if value.fract() == 0.0 && value.abs() < 1e15 {
+            format!("{}", value as i64)
+        } else {
+            format!("{value}")
+        };
+        let raw = RawValue::from_string(text).expect("a finite number is valid JSON");
+        match self.0.iter_mut().find(|(k, _)| k == key) {
+            Some((_, v)) => *v = raw,
+            None => self.0.push((key.to_string(), raw)),
+        }
+    }
+
+    pub fn remove(&mut self, key: &str) {
+        self.0.retain(|(k, _)| k != key);
     }
 
     fn write_compact(&self, out: &mut String) {
@@ -152,6 +190,38 @@ pub fn to_string(canvas: &Canvas) -> String {
 }
 
 impl Canvas {
+    /// `{"nodes":[],"edges":[]}`, as Obsidian starts a new canvas.
+    pub fn empty() -> Canvas {
+        Canvas { fields: vec![("nodes".into(), Field::Objects(Vec::new())), ("edges".into(), Field::Objects(Vec::new()))] }
+    }
+
+    /// The `name` array of objects (`nodes`, `edges`), created empty at the
+    /// end when the canvas has none. A field of that name that is not an
+    /// array of objects is replaced.
+    pub fn objects_mut(&mut self, name: &str) -> &mut Vec<Object> {
+        let at = match self.fields.iter().position(|(k, _)| k == name) {
+            Some(i) => i,
+            None => {
+                self.fields.push((name.to_string(), Field::Objects(Vec::new())));
+                self.fields.len() - 1
+            }
+        };
+        if !matches!(self.fields[at].1, Field::Objects(_)) {
+            self.fields[at].1 = Field::Objects(Vec::new());
+        }
+        match &mut self.fields[at].1 {
+            Field::Objects(list) => list,
+            Field::Raw(_) => unreachable!("replaced above"),
+        }
+    }
+
+    pub fn edges(&self) -> impl Iterator<Item = &Object> {
+        self.fields.iter().filter(|(k, _)| k == "edges").flat_map(|(_, f)| match f {
+            Field::Objects(list) => list.iter(),
+            Field::Raw(_) => Default::default(),
+        })
+    }
+
     pub fn nodes(&self) -> impl Iterator<Item = &Object> {
         self.fields.iter().filter(|(k, _)| k == "nodes").flat_map(|(_, f)| match f {
             Field::Objects(list) => list.iter(),
@@ -244,6 +314,31 @@ mod tests {
             }
         }
         assert!(checked > 0, "no canvases found");
+    }
+
+    #[test]
+    fn numbers_and_lists_edit_in_place() {
+        let mut canvas = from_str(SAMPLE).unwrap();
+        let b2 = canvas.objects_mut("nodes").iter_mut().find(|n| n.str("id").as_deref() == Some("b2")).unwrap();
+        assert_eq!(b2.num("x"), Some(0.5));
+        assert_eq!(b2.num("y"), Some(100.0));
+        // Equal: untouched, keeps `1e2`. Whole: written as an integer.
+        b2.set_num("y", 100.0);
+        b2.set_num("x", 12.0);
+        b2.remove("color");
+        let out = to_string(&canvas);
+        assert!(out.contains(r##"{"id":"b2","type":"file","file":"notes/Beta.md","subpath":"#Part","x":12,"y":1e2,"width":400,"height":400}"##), "{out}");
+        let mut fresh = Canvas::empty();
+        let mut node = Object::new();
+        node.set_str("id", "n");
+        node.set_num("x", -3.25);
+        fresh.objects_mut("nodes").push(node);
+        assert_eq!(to_string(&fresh), "{\n\t\"nodes\":[\n\t\t{\"id\":\"n\",\"x\":-3.25}\n\t],\n\t\"edges\":[]\n}");
+        assert_eq!(canvas.edges().count(), 1);
+        // A canvas without edges gets the array on first use.
+        let mut bare = from_str("{\"nodes\":[]}").unwrap();
+        bare.objects_mut("edges").push(Object::new());
+        assert_eq!(bare.edges().count(), 1);
     }
 
     #[test]
