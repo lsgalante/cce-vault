@@ -31,6 +31,7 @@
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 
+pub mod attachments;
 pub mod canvas;
 pub mod config;
 pub mod daily;
