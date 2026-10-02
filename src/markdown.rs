@@ -65,14 +65,47 @@ pub struct Callout {
     pub folded: Option<bool>,
 }
 
+/// An embed's requested display size, in px: a width, and a height only
+/// when both were given (`300x200`); otherwise the height follows the
+/// image's aspect.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EmbedSize {
+    pub width: u32,
+    pub height: Option<u32>,
+}
+
+/// The size an embed's alias text asks for: the part after its last `|`
+/// (or all of it), read as `W` or `WxH`. Anything else asks for none.
+pub fn embed_size(alias: &str) -> Option<EmbedSize> {
+    let spec = alias.rsplit('|').next().unwrap_or(alias).trim();
+    let (w, h) = match spec.split_once('x') {
+        Some((w, h)) => (w, Some(h)),
+        None => (spec, None),
+    };
+    let width = w.trim().parse::<u32>().ok().filter(|w| *w > 0)?;
+    let height = match h {
+        Some(h) => Some(h.trim().parse::<u32>().ok().filter(|h| *h > 0)?),
+        None => None,
+    };
+    Some(EmbedSize { width, height })
+}
+
+/// Whether a vault path names an image Obsidian shows inline when embedded.
+pub fn is_image(path: &str) -> bool {
+    let ext = path.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase());
+    matches!(ext.as_deref(), Some("png" | "jpg" | "jpeg" | "gif" | "bmp" | "webp" | "svg" | "avif"))
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Block {
     /// Frontmatter, as (key, value shown as text) pairs.
     Properties(Vec<(String, String)>),
     Heading { level: u8, spans: Vec<Span>, line: usize },
     Paragraph { spans: Vec<Span>, line: usize },
-    /// A paragraph that is nothing but one `![[embed]]`.
-    Embed { target: String, subpath: Option<String>, line: usize },
+    /// A paragraph that is nothing but one `![[embed]]`. `size` is the
+    /// display size asked for after the `|` — `![[pic.png|300]]`,
+    /// `![[pic.png|300x200]]`, `![alt|300](pic.png)` — as Obsidian reads it.
+    Embed { target: String, subpath: Option<String>, size: Option<EmbedSize>, line: usize },
     List { start: Option<u64>, items: Vec<ListItem>, line: usize },
     Quote { callout: Option<Callout>, blocks: Vec<Block>, line: usize },
     Code { lang: Option<String>, text: String, line: usize },
@@ -266,8 +299,8 @@ fn push_with_tags(spans: &mut Vec<Span>, text: &str, style: Style) {
 }
 
 fn paragraph_or_embed(spans: Vec<Span>, line: usize) -> Block {
-    if let [Span { link: Some(SpanLink::Embed { target, subpath }), .. }] = spans.as_slice() {
-        return Block::Embed { target: target.clone(), subpath: subpath.clone(), line };
+    if let [Span { text, link: Some(SpanLink::Embed { target, subpath }), .. }] = spans.as_slice() {
+        return Block::Embed { target: target.clone(), subpath: subpath.clone(), size: embed_size(text), line };
     }
     Block::Paragraph { spans, line }
 }
@@ -734,7 +767,23 @@ mod tests {
         let Block::Table { header, rows, .. } = &doc[1] else { panic!("{doc:?}") };
         assert_eq!(header.iter().map(|c| plain(c)).collect::<Vec<_>>(), ["a", "b"]);
         assert_eq!(rows[0][0][0].link, Some(SpanLink::Note { target: "L".into(), subpath: None }));
-        assert_eq!(doc[2], Block::Embed { target: "Pic.png".into(), subpath: None, line: 8 });
+        assert_eq!(doc[2], Block::Embed { target: "Pic.png".into(), subpath: None, size: None, line: 8 });
         assert!(matches!(doc[3], Block::Rule { line: 10 }));
+    }
+
+    #[test]
+    fn embed_sizes() {
+        let doc = blocks("![[a.png|300]]\n\n![[b.png|300x200]]\n\n![alt|120](c.png)\n\n![[d.png|caption]]\n");
+        let sizes: Vec<_> = doc.iter().map(|b| match b {
+            Block::Embed { size, .. } => *size,
+            other => panic!("{other:?}"),
+        }).collect();
+        assert_eq!(sizes, [
+            Some(EmbedSize { width: 300, height: None }),
+            Some(EmbedSize { width: 300, height: Some(200) }),
+            Some(EmbedSize { width: 120, height: None }),
+            None,
+        ]);
+        assert!(is_image("Pics/A.PNG") && !is_image("Note.md") && !is_image("README"));
     }
 }
