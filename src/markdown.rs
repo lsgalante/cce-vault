@@ -239,8 +239,9 @@ impl<'a> Builder<'a> {
         if let Some(line) = self.inline_line.take() {
             let spans = self.take_spans();
             if !spans.is_empty() {
-                let block = paragraph_or_embed(spans, line);
-                self.top().blocks().push(block);
+                for block in paragraph_blocks(spans, line) {
+                    self.top().blocks().push(block);
+                }
             }
         }
     }
@@ -296,6 +297,59 @@ fn push_with_tags(spans: &mut Vec<Span>, text: &str, style: Style) {
         }
     }
     push_span(spans, &text[start..], style, None);
+}
+
+/// A paragraph's blocks: a line of it that is nothing but one embed is an
+/// [`Block::Embed`] of its own (Obsidian shows a picture wherever it sits,
+/// and a pasted image lands on its own line inside a paragraph), and the
+/// lines between stay paragraphs. One line in, as before.
+fn paragraph_blocks(spans: Vec<Span>, line: usize) -> Vec<Block> {
+    if spans.is_empty() {
+        return Vec::new();
+    }
+    // Split into source lines at the soft and hard breaks ('\n' in text).
+    let mut lines: Vec<Vec<Span>> = vec![Vec::new()];
+    for s in &spans {
+        for (i, part) in s.text.split('\n').enumerate() {
+            if i > 0 {
+                lines.push(Vec::new());
+            }
+            if !part.is_empty() {
+                lines.last_mut().expect("one line").push(Span { text: part.to_string(), ..s.clone() });
+            }
+        }
+    }
+    let embed_line = |l: &[Span]| {
+        let mut real = l.iter().filter(|s| s.link.is_some() || !s.text.trim().is_empty());
+        matches!((real.next(), real.next()), (Some(Span { link: Some(SpanLink::Embed { .. }), .. }), None))
+    };
+    if lines.len() < 2 || !lines.iter().any(|l| embed_line(l)) {
+        return vec![paragraph_or_embed(spans, line)];
+    }
+    let mut out = Vec::new();
+    let mut para: Vec<Span> = Vec::new();
+    let mut para_line = line;
+    let flush = |para: &mut Vec<Span>, at: usize, out: &mut Vec<Block>| {
+        if !para.is_empty() {
+            out.push(Block::Paragraph { spans: std::mem::take(para), line: at });
+        }
+    };
+    for (i, l) in lines.into_iter().enumerate() {
+        if embed_line(&l) {
+            flush(&mut para, para_line, &mut out);
+            let embed = l.into_iter().find(|s| s.link.is_some()).expect("an embed line has one");
+            out.push(paragraph_or_embed(vec![embed], line + i));
+        } else {
+            if para.is_empty() {
+                para_line = line + i;
+            } else {
+                para.push(Span { text: "\n".into(), style: Style::default(), link: None });
+            }
+            para.extend(l);
+        }
+    }
+    flush(&mut para, para_line, &mut out);
+    out
 }
 
 fn paragraph_or_embed(spans: Vec<Span>, line: usize) -> Block {
@@ -468,8 +522,8 @@ pub fn blocks(src: &str) -> Vec<Block> {
             Event::End(TagEnd::Paragraph) => {
                 let spans = b.take_spans();
                 let line = b.line(range.start);
-                if !spans.is_empty() {
-                    b.push_block(paragraph_or_embed(spans, line));
+                for block in paragraph_blocks(spans, line) {
+                    b.push_block(block);
                 }
             }
             Event::End(TagEnd::Heading(level)) => {
@@ -769,6 +823,19 @@ mod tests {
         assert_eq!(rows[0][0][0].link, Some(SpanLink::Note { target: "L".into(), subpath: None }));
         assert_eq!(doc[2], Block::Embed { target: "Pic.png".into(), subpath: None, size: None, line: 8 });
         assert!(matches!(doc[3], Block::Rule { line: 10 }));
+    }
+
+    #[test]
+    fn an_embed_on_its_own_line_inside_a_paragraph_is_a_block() {
+        let doc = blocks("Some text.\n![[pic.png|200]]\nmore *text*\nand more\n");
+        assert_eq!(doc.len(), 3, "{doc:?}");
+        assert!(matches!(&doc[0], Block::Paragraph { line: 0, .. }));
+        assert_eq!(doc[1], Block::Embed { target: "pic.png".into(), subpath: None, size: Some(EmbedSize { width: 200, height: None }), line: 1 });
+        let Block::Paragraph { spans, line: 2 } = &doc[2] else { panic!("{doc:?}") };
+        assert_eq!(plain(spans), "more text\nand more");
+        // Mid-sentence it stays inline; a plain paragraph is untouched.
+        assert!(matches!(&blocks("see ![[pic.png]] here\n")[0], Block::Paragraph { .. }));
+        assert_eq!(blocks("a\nb\n").len(), 1);
     }
 
     #[test]
