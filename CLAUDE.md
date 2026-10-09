@@ -16,7 +16,7 @@ batches on its own event loop. The files are the source of truth.
 
 | Module | What it owns |
 | --- | --- |
-| `parse` | One note → properties, links, tags, headings, block ids, tasks, all with byte spans |
+| `parse` | One note → properties, links, tags, headings, block ids, tasks, all with byte spans; a task's due date (`📅 2026-10-20`, or `due 2026-10-20` / `[due:: …]` by hand) via `split_due` |
 | `index` | Every file, link resolution, backlinks, unresolved links, tags, tasks; the optional parse cache |
 | `watch` | Recursive `notify` watcher, debounced (150 ms quiet, 1 s cap), hidden paths dropped |
 | `search` | Fuzzy names (quick switcher), full-text scan, unlinked mentions |

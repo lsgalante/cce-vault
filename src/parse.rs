@@ -18,6 +18,7 @@
 
 use std::ops::Range;
 
+use chrono::NaiveDate;
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -105,6 +106,10 @@ pub struct Task {
     pub line: usize,
     /// Byte offset of the status character, for toggling in place.
     pub status_at: usize,
+    /// The date the task is due, from its text ([`split_due`]). `text`
+    /// keeps the date as written.
+    #[serde(default)]
+    pub due: Option<NaiveDate>,
 }
 
 impl Task {
@@ -584,6 +589,7 @@ fn scan_lines(src: &str, from: usize, skip: &Ranges, lines: &LineIndex, note: &m
                     text: rest.trim().to_string(),
                     line: line_no,
                     status_at: line_start + status_at,
+                    due: split_due(rest).1,
                 });
             }
         }
@@ -593,6 +599,66 @@ fn scan_lines(src: &str, from: usize, skip: &Ranges, lines: &LineIndex, note: &m
             }
         }
     }
+}
+
+/// What a due date is written after: the Obsidian Tasks plugin's marker,
+/// which is what cce writes ([`with_due`]).
+pub const DUE_MARK: &str = "📅";
+
+/// A task text's due date, and the text without it. Read: `📅 2026-10-20`
+/// (the Tasks plugin's form), and as people write it by hand, `due
+/// 2026-10-20`, `due: 2026-10-20` and Dataview's `[due:: 2026-10-20]`
+/// (`due` in any case, as a word of its own). The first date found wins;
+/// text without one comes back whole, trimmed.
+pub fn split_due(text: &str) -> (String, Option<NaiveDate>) {
+    let b = text.as_bytes();
+    let date_at = |mut j: usize| -> Option<(usize, NaiveDate)> {
+        while b.get(j) == Some(&b' ') {
+            j += 1;
+        }
+        let s = text.get(j..j + 10)?;
+        if b.get(j + 10).is_some_and(u8::is_ascii_digit) || !s.bytes().all(|c| c.is_ascii_digit() || c == b'-') {
+            return None;
+        }
+        NaiveDate::parse_from_str(s, "%Y-%m-%d").ok().map(|d| (j + 10, d))
+    };
+    for (i, _) in text.char_indices() {
+        let span = if text[i..].starts_with(DUE_MARK) {
+            date_at(i + DUE_MARK.len()).map(|(end, d)| (i, end, d))
+        } else if b.len() >= i + 3
+            && b[i..i + 3].eq_ignore_ascii_case(b"due")
+            && (i == 0 || !text[..i].chars().next_back().is_some_and(char::is_alphanumeric))
+        {
+            let mut j = i + 3;
+            while b.get(j) == Some(&b':') && j < i + 5 {
+                j += 1;
+            }
+            // `due` must end the word: `duet 2026-…` is not a date.
+            if j == i + 3 && b.get(j) != Some(&b' ') {
+                None
+            } else {
+                date_at(j).map(|(end, d)| {
+                    let bracketed = i > 0 && b[i - 1] == b'[' && b.get(end) == Some(&b']');
+                    if bracketed { (i - 1, end + 1, d) } else { (i, end, d) }
+                })
+            }
+        } else {
+            None
+        };
+        if let Some((start, end, date)) = span {
+            let (head, tail) = (text[..start].trim_end(), text[end..].trim_start());
+            let rest = if head.is_empty() || tail.is_empty() { format!("{head}{tail}") } else { format!("{head} {tail}") };
+            return (rest.trim().to_string(), Some(date));
+        }
+    }
+    (text.trim().to_string(), None)
+}
+
+/// `text` carrying `due` as the Tasks plugin writes it, replacing any due
+/// date it had.
+pub fn with_due(text: &str, due: NaiveDate) -> String {
+    let (rest, _) = split_due(text);
+    format!("{rest} {DUE_MARK} {}", due.format("%Y-%m-%d"))
 }
 
 /// `- [ ] text`, `* [x] text`, `1. [/] text`, also inside `> ` quotes and
@@ -776,6 +842,27 @@ mod tests {
         assert_eq!(&src[n.tasks[1].status_at..n.tasks[1].status_at + 1], "x");
         assert!(n.tasks[0].is_open() && n.tasks[2].is_open());
         assert!(!n.tasks[1].is_open() && !n.tasks[3].is_open());
+    }
+
+    #[test]
+    fn due_dates() {
+        let d = |s: &str| NaiveDate::parse_from_str(s, "%Y-%m-%d").unwrap();
+        assert_eq!(split_due("Book flights 📅 2026-10-20"), ("Book flights".into(), Some(d("2026-10-20"))));
+        assert_eq!(split_due("Book 📅2026-10-20 flights"), ("Book flights".into(), Some(d("2026-10-20"))));
+        assert_eq!(split_due("Pay rent due 2026-11-01"), ("Pay rent".into(), Some(d("2026-11-01"))));
+        assert_eq!(split_due("Pay rent Due: 2026-11-01 #home"), ("Pay rent #home".into(), Some(d("2026-11-01"))));
+        assert_eq!(split_due("Pay rent [due:: 2026-11-01]"), ("Pay rent".into(), Some(d("2026-11-01"))));
+        // Not dates: a word that only starts with "due", a bad day, no date.
+        assert_eq!(split_due("duet 2026-11-01").1, None);
+        assert_eq!(split_due("residue 2026-11-01").1, None);
+        assert_eq!(split_due("due 2026-02-30").1, None);
+        assert_eq!(split_due("due soon"), ("due soon".into(), None));
+        assert_eq!(split_due("📅 2026-10-201").1, None);
+        assert_eq!(with_due("Book flights due 2026-10-01", d("2026-10-20")), "Book flights 📅 2026-10-20");
+        let n = parse("- [ ] a 📅 2026-10-20\n- [x] b\n");
+        assert_eq!(n.tasks[0].due, Some(d("2026-10-20")));
+        assert_eq!(n.tasks[0].text, "a 📅 2026-10-20");
+        assert_eq!(n.tasks[1].due, None);
     }
 
     #[test]

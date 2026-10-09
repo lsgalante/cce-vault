@@ -486,7 +486,7 @@ impl Index {
 
 /// Bumped whenever `Entry` or `Note` change shape; an old cache is then
 /// ignored rather than misread.
-const CACHE_VERSION: u32 = 1;
+const CACHE_VERSION: u32 = 2;
 
 #[derive(Serialize, Deserialize)]
 struct CacheFile {
