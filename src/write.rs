@@ -106,6 +106,62 @@ fn splice(text: &str, mut edits: Vec<(Range<usize>, String)>) -> String {
     out
 }
 
+/// Where [`Index::move_task`] puts a task: just before, or just after, the
+/// task on that line (0-based) of the destination note.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TaskPlace {
+    Before(usize),
+    After(usize),
+}
+
+impl TaskPlace {
+    fn line(self) -> usize {
+        match self {
+            TaskPlace::Before(l) | TaskPlace::After(l) => l,
+        }
+    }
+}
+
+/// The bytes of the task on `line`, its line break included.
+fn task_line_span(text: &str, line: usize) -> Option<Range<usize>> {
+    parse::parse(text).tasks.iter().find(|t| t.line == line)?;
+    let lines = parse::LineIndex::new(text);
+    let start = lines.start_of(line);
+    let end = text[start..].find('\n').map_or(text.len(), |i| start + i + 1);
+    Some(start..end)
+}
+
+/// The byte offset `place` names in `text`: the start of the anchor task's
+/// line, or the end of it (after its line break).
+fn place_offset(text: &str, place: TaskPlace) -> Option<usize> {
+    let span = task_line_span(text, place.line())?;
+    Some(match place {
+        TaskPlace::Before(_) => span.start,
+        TaskPlace::After(_) => span.end,
+    })
+}
+
+/// The edit that takes a line out. A last line with no break of its own
+/// takes the break before it instead, so the file still ends as it did.
+fn removal(text: &str, span: Range<usize>) -> (Range<usize>, String) {
+    if span.end == text.len() && !text.ends_with('\n') && span.start > 0 {
+        let before = if text[..span.start].ends_with("\r\n") { 2 } else { 1 };
+        return (span.start - before..span.end, String::new());
+    }
+    (span, String::new())
+}
+
+/// The text that puts `line` in at `at`: with the file's own line ending,
+/// and after a break of its own at the end of a file that has none.
+fn insertion(text: &str, at: usize, line: &str) -> String {
+    let eol = if text.contains("\r\n") { "\r\n" } else { "\n" };
+    if at == text.len() && !text.is_empty() && !text.ends_with('\n') {
+        format!("{eol}{line}")
+    } else {
+        format!("{line}{eol}")
+    }
+}
+
 /// `../../x/y.md` from folder `from_dir` to vault path `to`.
 fn relative_path(from_dir: &str, to: &str) -> String {
     let a: Vec<&str> = from_dir.split('/').filter(|s| !s.is_empty()).collect();
@@ -225,6 +281,49 @@ impl Index {
         atomic_write(&abs, new.as_bytes())?;
         self.refresh(&[path.to_string()]);
         Ok(())
+    }
+
+    /// Move the task on `line` of `path` to `place` in note `to` — the same
+    /// note (a reorder) or another. Its line comes out of one and goes in at
+    /// the other verbatim, with the destination's line ending; nothing else
+    /// changes. Both notes are re-read. Into another note the destination is
+    /// written first, so a failure part-way leaves the task in both rather
+    /// than in neither. Putting a task where it already is does nothing.
+    pub fn move_task(&mut self, path: &str, line: usize, to: &str, place: TaskPlace) -> Result<(), WriteError> {
+        let src_abs = self.abs(path);
+        let src = self.read_note(path, &src_abs)?;
+        let span = task_line_span(&src, line).ok_or_else(|| WriteError::NoTask { path: path.to_string(), line })?;
+        let text = src[span.clone()].trim_end_matches(['\n', '\r']).to_string();
+        if to == path {
+            let at = place_offset(&src, place).ok_or_else(|| WriteError::NoTask { path: to.to_string(), line: place.line() })?;
+            if at == span.start || at == span.end || (span.end == src.len() && !src.ends_with('\n') && at == src.len()) {
+                return Ok(());
+            }
+            let new = splice(&src, vec![removal(&src, span), (at..at, insertion(&src, at, &text))]);
+            atomic_write(&src_abs, new.as_bytes())?;
+            self.refresh(&[path.to_string()]);
+            return Ok(());
+        }
+        let dst_abs = self.abs(to);
+        let dst = self.read_note(to, &dst_abs)?;
+        let at = place_offset(&dst, place).ok_or_else(|| WriteError::NoTask { path: to.to_string(), line: place.line() })?;
+        let moved_in = splice(&dst, vec![(at..at, insertion(&dst, at, &text))]);
+        atomic_write(&dst_abs, moved_in.as_bytes())?;
+        let moved_out = splice(&src, vec![removal(&src, span)]);
+        atomic_write(&src_abs, moved_out.as_bytes())?;
+        self.refresh(&[to.to_string(), path.to_string()]);
+        Ok(())
+    }
+
+    /// A note's text for an edit: a note, and present.
+    fn read_note(&self, path: &str, abs: &Path) -> Result<String, WriteError> {
+        if FileKind::of(path) != FileKind::Note {
+            return Err(WriteError::NotFound(path.to_string()));
+        }
+        read_text(abs).map_err(|e| match e.kind() {
+            io::ErrorKind::NotFound => WriteError::NotFound(path.to_string()),
+            _ => e.into(),
+        })
     }
 
     fn lookup_exact(&self, rel: &str) -> Option<&str> {
@@ -613,6 +712,35 @@ mod tests {
         assert_eq!(plan.edits, [LinkEdit { path: "L.md".into(), line: 0, old: "[[A]]".into(), new: "[[Z]]".into() }]);
         assert_eq!(read(&dir, "L.md"), "[[A]]");
         assert!(dir.path().join("A.md").exists());
+    }
+
+    #[test]
+    fn tasks_move_within_a_note_and_between_notes() {
+        let (dir, mut ix) = vault(&[
+            ("A.md", "# A\n- [ ] one\n- [ ] two\ntext\n- [ ] three"),
+            ("B.md", "- [ ] four\r\n- [x] five\r\n"),
+        ]);
+        // Down within a note, past prose; the last line keeps having no break.
+        ix.move_task("A.md", 1, "A.md", TaskPlace::After(4)).unwrap();
+        assert_eq!(read(&dir, "A.md"), "# A\n- [ ] two\ntext\n- [ ] three\n- [ ] one");
+        // The last line up to the top: its break comes from the one before.
+        ix.move_task("A.md", 4, "A.md", TaskPlace::Before(1)).unwrap();
+        assert_eq!(read(&dir, "A.md"), "# A\n- [ ] one\n- [ ] two\ntext\n- [ ] three");
+        // Into another note, taking its CRLF; out of this one cleanly.
+        ix.move_task("A.md", 2, "B.md", TaskPlace::After(0)).unwrap();
+        assert_eq!(read(&dir, "B.md"), "- [ ] four\r\n- [ ] two\r\n- [x] five\r\n");
+        assert_eq!(read(&dir, "A.md"), "# A\n- [ ] one\ntext\n- [ ] three");
+        let in_b: Vec<_> = ix.tasks().filter(|(p, _)| *p == "B.md").map(|(_, t)| t.text.clone()).collect();
+        assert_eq!(in_b, ["four", "two", "five"]);
+        // Where it already is: nothing happens.
+        let before = read(&dir, "B.md");
+        ix.move_task("B.md", 1, "B.md", TaskPlace::Before(2)).unwrap();
+        ix.move_task("B.md", 1, "B.md", TaskPlace::After(0)).unwrap();
+        assert_eq!(read(&dir, "B.md"), before);
+        // A line that is not a task, at either end.
+        assert!(matches!(ix.move_task("A.md", 0, "B.md", TaskPlace::Before(0)), Err(WriteError::NoTask { .. })));
+        assert!(matches!(ix.move_task("A.md", 1, "B.md", TaskPlace::Before(9)), Err(WriteError::NoTask { .. })));
+        assert_eq!(read(&dir, "B.md"), before);
     }
 
     #[test]

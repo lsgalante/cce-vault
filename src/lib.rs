@@ -45,4 +45,4 @@ pub mod write;
 pub use index::{Backlink, Changes, Entry, FileKind, Index};
 pub use parse::{split_due, with_due, Link, LinkKind, Note, Task, DUE_MARK};
 pub use watch::VaultWatcher;
-pub use write::{LinkEdit, RenamePlan, WriteError};
+pub use write::{LinkEdit, RenamePlan, TaskPlace, WriteError};
