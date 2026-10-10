@@ -16,7 +16,7 @@ path = "src/main.rs"
 [dependencies]
 # The socket convention and spawn_detached / de_bin, for the cce-notes
 # protocol (`notes_ipc`); GUI-free, without the config.
-cce-core = { git = "https://github.com/lsgalante/cce-core.git", rev = "0adfe0bb400d4ac7e85f4ab36145dda3f346fcd4", default-features = false }
+cce-core = { git = "https://github.com/lsgalante/cce-core.git", rev = "6a542c18ee31a20cfa3ecaa9da71ffa1d995af04", default-features = false }
 chrono = { version = "0.4.45", features = ["serde"] }
 indexmap = { version = "2", features = ["serde"] }
 kdl = "4.6"
