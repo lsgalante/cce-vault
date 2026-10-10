@@ -37,6 +37,8 @@ pub mod config;
 pub mod daily;
 pub mod index;
 pub mod markdown;
+#[cfg(unix)]
+pub mod notes_ipc;
 pub mod parse;
 pub mod search;
 pub mod watch;

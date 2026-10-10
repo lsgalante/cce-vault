@@ -24,6 +24,7 @@ batches on its own event loop. The files are the source of truth.
 | `canvas` | JSON Canvas as `serde_json::Value`, written byte-exact with Obsidian |
 | `daily` | Daily notes from `.obsidian/daily-notes.json`; moment.js formats; template variables |
 | `config` | The vault root: `--vault`, `$CCE_VAULT`, then `vault { path "…" }` in `~/.config/cce/config.kdl` |
+| `notes_ipc` | The cce-notes instance protocol (`open`/`daily`/`search`/`show`, the `current`/`vault` queries) and `open`, the bounded off-thread hand-off cce-graph, cce-grid and cce-list use (unix only; on cce-core's socket convention) |
 | `main.rs` | The `cce-vault` CLI (`cce-vault --help`) |
 
 ## Invariants — each was a design decision, keep them
