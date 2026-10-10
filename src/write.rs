@@ -193,6 +193,40 @@ impl Index {
         Ok(())
     }
 
+    /// Set the due date of the task on `line` (0-based) of a note, or with
+    /// `None` take it out. The date is written as the Tasks plugin writes
+    /// it, `📅 2026-10-20`, at the end of the task's text, replacing a date
+    /// in any form [`parse::split_due`] reads; nothing else on the line
+    /// changes. Like [`set_task`](Self::set_task), it re-reads the note.
+    pub fn set_task_due(&mut self, path: &str, line: usize, due: Option<chrono::NaiveDate>) -> Result<(), WriteError> {
+        let no_task = || WriteError::NoTask { path: path.to_string(), line };
+        if FileKind::of(path) != FileKind::Note {
+            return Err(no_task());
+        }
+        let abs = self.abs(path);
+        let text = read_text(&abs).map_err(|e| match e.kind() {
+            io::ErrorKind::NotFound => WriteError::NotFound(path.to_string()),
+            _ => e.into(),
+        })?;
+        let note = parse::parse(&text);
+        let task = note.tasks.iter().find(|t| t.line == line).ok_or_else(no_task)?;
+        // The line holding the status character, without its line break.
+        let start = text[..task.status_at].rfind('\n').map_or(0, |i| i + 1);
+        let end = text[task.status_at..].find('\n').map_or(text.len(), |i| task.status_at + i);
+        let line_text = text[start..end].trim_end_matches('\r');
+        let (_, _, rest) = parse::task_parts(line_text).ok_or_else(no_task)?;
+        let rest_at = start + line_text.len() - rest.len();
+        let body = match due {
+            Some(d) => parse::with_due(rest, d),
+            None => parse::split_due(rest).0,
+        };
+        let body = if body.is_empty() { body } else { format!(" {body}") };
+        let new = splice(&text, vec![(rest_at..start + line_text.len(), body)]);
+        atomic_write(&abs, new.as_bytes())?;
+        self.refresh(&[path.to_string()]);
+        Ok(())
+    }
+
     fn lookup_exact(&self, rel: &str) -> Option<&str> {
         let lower = rel.to_lowercase();
         self.files().keys().find(|k| k.to_lowercase() == lower).map(String::as_str)
@@ -579,6 +613,24 @@ mod tests {
         assert_eq!(plan.edits, [LinkEdit { path: "L.md".into(), line: 0, old: "[[A]]".into(), new: "[[Z]]".into() }]);
         assert_eq!(read(&dir, "L.md"), "[[A]]");
         assert!(dir.path().join("A.md").exists());
+    }
+
+    #[test]
+    fn task_due_dates_are_set_replaced_and_cleared() {
+        let d = |s: &str| chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").unwrap();
+        let src = "# Head\r\n- [ ] one #tag\r\n  > - [x] two due 2026-01-01 more\r\nafter\r\n";
+        let (dir, mut ix) = vault(&[("T.md", src)]);
+        ix.set_task_due("T.md", 1, Some(d("2026-10-20"))).unwrap();
+        ix.set_task_due("T.md", 2, Some(d("2026-11-02"))).unwrap();
+        assert_eq!(
+            read(&dir, "T.md"),
+            "# Head\r\n- [ ] one #tag 📅 2026-10-20\r\n  > - [x] two more 📅 2026-11-02\r\nafter\r\n"
+        );
+        let dues: Vec<_> = ix.tasks().map(|(_, t)| t.due).collect();
+        assert_eq!(dues, [Some(d("2026-10-20")), Some(d("2026-11-02"))]);
+        ix.set_task_due("T.md", 1, None).unwrap();
+        assert_eq!(read(&dir, "T.md"), "# Head\r\n- [ ] one #tag\r\n  > - [x] two more 📅 2026-11-02\r\nafter\r\n");
+        assert!(matches!(ix.set_task_due("T.md", 0, None), Err(WriteError::NoTask { .. })));
     }
 
     #[test]
