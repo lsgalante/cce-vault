@@ -91,10 +91,6 @@ fn check_new_path(to: &str) -> Result<String, WriteError> {
     Ok(clean.to_string())
 }
 
-fn read_text(path: &Path) -> io::Result<String> {
-    let bytes = std::fs::read(path)?;
-    String::from_utf8(bytes).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
-}
 
 /// Apply byte-range replacements, last first so earlier spans stay valid.
 fn splice(text: &str, mut edits: Vec<(Range<usize>, String)>) -> String {
@@ -184,21 +180,34 @@ impl Index {
         if self.lookup_exact(&rel).is_some() {
             return Err(WriteError::Exists(rel));
         }
-        atomic_write(&self.abs(&rel), content.as_bytes())?;
+        self.store(&rel, content.as_bytes())?;
         self.refresh(std::slice::from_ref(&rel));
         Ok(rel)
     }
 
-    /// A file's current text, read from disk (not from the index).
+    /// A file's current text, read from disk or memory (not from the
+    /// index's parse).
     pub fn read_text(&self, path: &str) -> io::Result<String> {
-        read_text(&self.abs(path))
+        let bytes = self.read_bytes(path)?;
+        String::from_utf8(bytes).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+    }
+
+    /// Delete a file. Links to it are left as they are (they become
+    /// unresolved), as Obsidian leaves them.
+    pub fn delete(&mut self, path: &str) -> Result<(), WriteError> {
+        if !self.exists(path) {
+            return Err(WriteError::NotFound(path.to_string()));
+        }
+        self.unlink(path)?;
+        self.refresh(&[path.to_string()]);
+        Ok(())
     }
 
     /// Replace a note's whole text — an editor's save. Creates the file
     /// (and its folders) when it does not exist yet.
     pub fn write_text(&mut self, path: &str, text: &str) -> Result<(), WriteError> {
         let rel = check_new_path(path)?;
-        atomic_write(&self.abs(&rel), text.as_bytes())?;
+        self.store(&rel, text.as_bytes())?;
         self.refresh(&[rel]);
         Ok(())
     }
@@ -206,8 +215,7 @@ impl Index {
     /// Append a paragraph to a note, creating the note if it is missing.
     pub fn append(&mut self, path: &str, text: &str) -> Result<(), WriteError> {
         let rel = check_new_path(path)?;
-        let abs = self.abs(&rel);
-        let mut body = match read_text(&abs) {
+        let mut body = match self.read_text(&rel) {
             Ok(t) => t,
             Err(e) if e.kind() == io::ErrorKind::NotFound => String::new(),
             Err(e) => return Err(e.into()),
@@ -219,7 +227,7 @@ impl Index {
         if !text.ends_with('\n') {
             body.push('\n');
         }
-        atomic_write(&abs, body.as_bytes())?;
+        self.store(&rel, body.as_bytes())?;
         self.refresh(&[rel]);
         Ok(())
     }
@@ -230,8 +238,7 @@ impl Index {
         if FileKind::of(path) != FileKind::Note {
             return Err(WriteError::NoTask { path: path.to_string(), line });
         }
-        let abs = self.abs(path);
-        let text = read_text(&abs).map_err(|e| match e.kind() {
+        let text = self.read_text(path).map_err(|e| match e.kind() {
             io::ErrorKind::NotFound => WriteError::NotFound(path.to_string()),
             _ => e.into(),
         })?;
@@ -244,7 +251,7 @@ impl Index {
         let at = task.status_at;
         let old_len = task.status.len_utf8();
         let new = splice(&text, vec![(at..at + old_len, status.to_string())]);
-        atomic_write(&abs, new.as_bytes())?;
+        self.store(path, new.as_bytes())?;
         self.refresh(&[path.to_string()]);
         Ok(())
     }
@@ -259,8 +266,7 @@ impl Index {
         if FileKind::of(path) != FileKind::Note {
             return Err(no_task());
         }
-        let abs = self.abs(path);
-        let text = read_text(&abs).map_err(|e| match e.kind() {
+        let text = self.read_text(path).map_err(|e| match e.kind() {
             io::ErrorKind::NotFound => WriteError::NotFound(path.to_string()),
             _ => e.into(),
         })?;
@@ -278,7 +284,7 @@ impl Index {
         };
         let body = if body.is_empty() { body } else { format!(" {body}") };
         let new = splice(&text, vec![(rest_at..start + line_text.len(), body)]);
-        atomic_write(&abs, new.as_bytes())?;
+        self.store(path, new.as_bytes())?;
         self.refresh(&[path.to_string()]);
         Ok(())
     }
@@ -290,8 +296,7 @@ impl Index {
     /// written first, so a failure part-way leaves the task in both rather
     /// than in neither. Putting a task where it already is does nothing.
     pub fn move_task(&mut self, path: &str, line: usize, to: &str, place: TaskPlace) -> Result<(), WriteError> {
-        let src_abs = self.abs(path);
-        let src = self.read_note(path, &src_abs)?;
+        let src = self.read_note(path)?;
         let span = task_line_span(&src, line).ok_or_else(|| WriteError::NoTask { path: path.to_string(), line })?;
         let text = src[span.clone()].trim_end_matches(['\n', '\r']).to_string();
         if to == path {
@@ -300,27 +305,26 @@ impl Index {
                 return Ok(());
             }
             let new = splice(&src, vec![removal(&src, span), (at..at, insertion(&src, at, &text))]);
-            atomic_write(&src_abs, new.as_bytes())?;
+            self.store(path, new.as_bytes())?;
             self.refresh(&[path.to_string()]);
             return Ok(());
         }
-        let dst_abs = self.abs(to);
-        let dst = self.read_note(to, &dst_abs)?;
+        let dst = self.read_note(to)?;
         let at = place_offset(&dst, place).ok_or_else(|| WriteError::NoTask { path: to.to_string(), line: place.line() })?;
         let moved_in = splice(&dst, vec![(at..at, insertion(&dst, at, &text))]);
-        atomic_write(&dst_abs, moved_in.as_bytes())?;
+        self.store(to, moved_in.as_bytes())?;
         let moved_out = splice(&src, vec![removal(&src, span)]);
-        atomic_write(&src_abs, moved_out.as_bytes())?;
+        self.store(path, moved_out.as_bytes())?;
         self.refresh(&[to.to_string(), path.to_string()]);
         Ok(())
     }
 
     /// A note's text for an edit: a note, and present.
-    fn read_note(&self, path: &str, abs: &Path) -> Result<String, WriteError> {
+    fn read_note(&self, path: &str) -> Result<String, WriteError> {
         if FileKind::of(path) != FileKind::Note {
             return Err(WriteError::NotFound(path.to_string()));
         }
-        read_text(abs).map_err(|e| match e.kind() {
+        self.read_text(path).map_err(|e| match e.kind() {
             io::ErrorKind::NotFound => WriteError::NotFound(path.to_string()),
             _ => e.into(),
         })
@@ -347,14 +351,10 @@ impl Index {
         let before: Vec<Option<String>> =
             self.outgoing(from).into_iter().map(|(_, t)| t.map(String::from)).collect();
 
-        let to_abs = self.abs(&prepared.plan.to);
-        if let Some(dir) = to_abs.parent() {
-            std::fs::create_dir_all(dir)?;
-        }
-        std::fs::rename(self.abs(from), &to_abs)?;
+        self.relocate(from, &prepared.plan.to)?;
         let mut touched = vec![from.to_string(), prepared.plan.to.clone()];
         for (path, content) in &prepared.writes {
-            atomic_write(&self.abs(path), content.as_bytes())?;
+            self.store(path, content.as_bytes())?;
             touched.push(path.clone());
         }
         self.refresh(&touched);
@@ -378,8 +378,7 @@ impl Index {
         if parent(from) == parent(to) || FileKind::of(to) != FileKind::Note {
             return Ok(Vec::new());
         }
-        let abs = self.abs(to);
-        let text = read_text(&abs)?;
+        let text = self.read_text(to)?;
         let note = parse::parse(&text);
         let mut edits = Vec::new();
         let mut out = Vec::new();
@@ -406,7 +405,7 @@ impl Index {
             edits.push((link.target_span.clone(), new));
         }
         if !edits.is_empty() {
-            atomic_write(&abs, splice(&text, edits).as_bytes())?;
+            self.store(to, splice(&text, edits).as_bytes())?;
             self.refresh(&[to.to_string()]);
         }
         Ok(out)
@@ -437,8 +436,7 @@ impl Index {
 
         for source in sources {
             let after = if source == from { to.as_str() } else { source };
-            let abs = self.abs(source);
-            let text = read_text(&abs)?;
+            let text = self.read_text(source)?;
             let new_text = match FileKind::of(source) {
                 FileKind::Canvas => self.rename_in_canvas(&text, source, after, from, &to, &mut plan)?,
                 _ => self.rename_in_text(&text, source, after, from, &to, None, &mut plan),
@@ -623,6 +621,7 @@ fn encode_like(link: &Link, text: &str, path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::index::Written;
 
     fn vault(files: &[(&str, &str)]) -> (tempfile::TempDir, Index) {
         let dir = tempfile::tempdir().unwrap();
@@ -790,5 +789,89 @@ mod tests {
         assert_eq!(relative_path("a/b", "a/c/x.md"), "../c/x.md");
         assert_eq!(relative_path("", "x.md"), "x.md");
         assert_eq!(relative_path("a", "x.md"), "../x.md");
+    }
+
+    /// Every file under a disk vault, hidden ones included, as text.
+    fn disk_files(dir: &tempfile::TempDir) -> std::collections::BTreeMap<String, String> {
+        walkdir::WalkDir::new(dir.path())
+            .into_iter()
+            .flatten()
+            .filter(|e| e.file_type().is_file())
+            .map(|e| {
+                let rel = e.path().strip_prefix(dir.path()).unwrap().to_string_lossy().into_owned();
+                (rel, std::fs::read_to_string(e.path()).unwrap())
+            })
+            .collect()
+    }
+
+    fn memory_files(ix: &Index) -> std::collections::BTreeMap<String, String> {
+        ix.memory_paths().into_iter().map(|p| (p.to_string(), ix.read_text(p).unwrap())).collect()
+    }
+
+    /// The same edits on a disk vault and an in-memory one leave the same
+    /// files, the same links, and a journal naming each file written.
+    #[test]
+    fn memory_vault_matches_disk() {
+        let files: &[(&str, &str)] = &[
+            (".obsidian/daily-notes.json", r#"{"folder":"Daily","template":"Templates/Day"}"#),
+            ("Templates/Day.md", "# {{title}}\n"),
+            ("Old.md", "self: [[Old#Top]]\n- [ ] one\n- [ ] two\n"),
+            ("notes/A.md", "[[Old]] [md](../Old.md) [[Other]]\n- [ ] here\n"),
+            ("B.canvas", "{\n\t\"nodes\":[\n\t\t{\"id\":\"f\",\"type\":\"file\",\"file\":\"Old.md\",\"x\":0,\"y\":0,\"width\":1,\"height\":1}\n\t],\n\t\"edges\":[]\n}"),
+            ("Other.md", "gone soon"),
+        ];
+        let (dir, mut disk) = vault(files);
+        let mut mem = Index::in_memory(files.iter().map(|(p, t)| (*p, t.as_bytes().to_vec())));
+        assert!(mem.is_in_memory() && !disk.is_in_memory());
+        assert_eq!(mem.files().keys().collect::<Vec<_>>(), disk.files().keys().collect::<Vec<_>>());
+
+        let day = chrono::NaiveDate::from_ymd_opt(2026, 10, 12).unwrap();
+        let due = chrono::NaiveDate::from_ymd_opt(2026, 10, 20).unwrap();
+        for ix in [&mut disk, &mut mem] {
+            ix.rename("Old.md", "moved/New.md").unwrap();
+            ix.set_task("moved/New.md", 1, 'x').unwrap();
+            ix.set_task_due("notes/A.md", 1, Some(due)).unwrap();
+            ix.move_task("moved/New.md", 2, "notes/A.md", TaskPlace::After(1)).unwrap();
+            ix.append("Inbox.md", "captured").unwrap();
+            ix.create("Fresh.md", "[[New]]").unwrap();
+            ix.write_text("Fresh.md", "[[New]] again").unwrap();
+            assert_eq!(ix.daily(day, true).unwrap(), ("Daily/2026-10-12.md".to_string(), true));
+            ix.delete("Other.md").unwrap();
+            assert!(matches!(ix.delete("Other.md"), Err(WriteError::NotFound(_))));
+        }
+        assert_eq!(memory_files(&mem), disk_files(&dir));
+        assert_eq!(mem.backlinks("moved/New.md").len(), disk.backlinks("moved/New.md").len());
+        assert_eq!(mem.unresolved().keys().collect::<Vec<_>>(), vec!["other"]);
+        assert_eq!(mem.search("captured", 10).len(), 1);
+        assert!(disk.take_written().is_empty());
+
+        let written = mem.take_written();
+        assert_eq!(written[0], Written::Removed("Old.md".into()));
+        assert_eq!(written[1], Written::Put("moved/New.md".into()));
+        assert_eq!(written.last(), Some(&Written::Removed("Other.md".into())));
+        for p in ["notes/A.md", "B.canvas", "Inbox.md", "Fresh.md", "Daily/2026-10-12.md"] {
+            assert!(written.contains(&Written::Put(p.into())), "{p} missing from {written:?}");
+        }
+        assert!(mem.take_written().is_empty());
+    }
+
+    /// Outside updates (a sync) re-index without journalling, and a file
+    /// that appears resolves the links that were waiting for it.
+    #[test]
+    fn memory_vault_takes_outside_changes() {
+        let mut ix = Index::in_memory([("A.md", b"[[B]]".to_vec()), (".obsidian/app.json", b"{}".to_vec())]);
+        assert_eq!(ix.files().len(), 1, "hidden files are kept but not indexed");
+        assert!(ix.read_text(".obsidian/app.json").is_ok());
+        assert!(ix.backlinks("B.md").is_empty());
+
+        let changes = ix.put_files([("B.md", b"back to [[A]]".to_vec())]);
+        assert_eq!(changes.updated, vec!["B.md"]);
+        assert_eq!(ix.backlinks("B.md").len(), 1);
+        assert!(ix.put_files([("B.md", b"back to [[A]]".to_vec())]).is_empty(), "same bytes, no change");
+
+        let changes = ix.remove_files(["B.md"]);
+        assert_eq!(changes.removed, vec!["B.md"]);
+        assert!(ix.backlinks("B.md").is_empty());
+        assert!(ix.take_written().is_empty());
     }
 }

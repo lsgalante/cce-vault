@@ -17,7 +17,7 @@ batches on its own event loop. The files are the source of truth.
 | Module | What it owns |
 | --- | --- |
 | `parse` | One note → properties, links, tags, headings, block ids, tasks, all with byte spans; a task's due date (`📅 2026-10-20`, or `due 2026-10-20` / `[due:: …]` by hand) via `split_due` |
-| `index` | Every file, link resolution, backlinks, unresolved links, tags, tasks; the optional parse cache |
+| `index` | Every file, link resolution, backlinks, unresolved links, tags, tasks; the optional parse cache; the in-memory mode (`Index::in_memory`) |
 | `watch` | Recursive `notify` watcher, debounced (150 ms quiet, 1 s cap), hidden paths dropped |
 | `search` | Fuzzy names (quick switcher), full-text scan, unlinked mentions |
 | `write` | `atomic_write`, create/append, `set_task`, `rename` with link rewrite |
@@ -54,6 +54,18 @@ batches on its own event loop. The files are the source of truth.
   (`.obsidian`, `.trash`, `.git`, and this crate's own `.name.PID.cce-tmp`
   write temps). The walk, `Index::rel` and the watcher all apply it.
   `.obsidian/` is read (daily-note settings) and **never written**.
+- **A vault can live in memory** (`Index::in_memory(files)`), for the
+  browser, which has no filesystem (`cce-vault-web`). Every read and write
+  goes through `Index`'s storage helpers (`read_bytes` / `read_text`,
+  `store`, `relocate`, `unlink`, `exists`), which pick disk or memory;
+  **never call `std::fs` from a write, search or daily path**, or the
+  in-memory vault silently reads nothing. Write calls journal what they
+  changed (`take_written`, `Written::Put` / `Removed`) for the host to
+  persist; outside changes come in through `put_files` / `remove_files`,
+  unjournalled. Hidden files are held (so `.obsidian/` settings are read)
+  but not indexed. `memory_vault_matches_disk` runs the same edits on
+  both modes and compares every file. `par_map` runs single-threaded on
+  wasm32, where std cannot spawn.
 - **Canvases are `Value`s with `preserve_order`, never typed structs**, and
   `canvas::to_string` reproduces Obsidian's layout (tab indent, one compact
   node per line, no trailing newline). A rename that touches a canvas must

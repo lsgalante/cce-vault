@@ -197,7 +197,7 @@ impl Index {
         }
         let paths: Vec<&str> = self.notes().map(|(p, _)| p).collect();
         let mut hits = par_map(&paths, |path: &&str| {
-            let text = std::fs::read_to_string(self.abs(path)).ok()?;
+            let text = self.read_text(path).ok()?;
             let lower_text = text.to_lowercase();
             let lower_path = path.to_lowercase();
             if !terms.iter().all(|t| lower_text.contains(t.as_str()) || lower_path.contains(t.as_str())) {
@@ -243,7 +243,7 @@ impl Index {
         }
         let paths: Vec<&str> = self.notes().map(|(p, _)| p).filter(|p| *p != path).collect();
         let mut out = par_map(&paths, |source: &&str| {
-            let text = std::fs::read_to_string(self.abs(source)).ok()?;
+            let text = self.read_text(source).ok()?;
             let lower = text.to_lowercase();
             if !names.iter().any(|n| lower.contains(n.as_str())) {
                 return None;

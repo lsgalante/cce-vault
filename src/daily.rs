@@ -10,7 +10,7 @@ use chrono::{Datelike, Local, NaiveDate, NaiveDateTime, Timelike};
 use serde::Deserialize;
 
 use crate::index::{FileKind, Index};
-use crate::write::{atomic_write, WriteError};
+use crate::write::WriteError;
 
 pub const DEFAULT_FORMAT: &str = "YYYY-MM-DD";
 
@@ -28,8 +28,8 @@ impl DailyConfig {
     /// Obsidian's settings for this vault, or its defaults (vault root,
     /// `YYYY-MM-DD`, no template) when there are none.
     pub fn load(index: &Index) -> DailyConfig {
-        let path = index.root().join(".obsidian/daily-notes.json");
-        let mut cfg: DailyConfig = std::fs::read_to_string(path)
+        let mut cfg: DailyConfig = index
+            .read_text(".obsidian/daily-notes.json")
             .ok()
             .and_then(|t| serde_json::from_str(&t).ok())
             .unwrap_or_default();
@@ -57,7 +57,7 @@ impl Index {
     pub fn daily(&mut self, date: NaiveDate, create: bool) -> Result<(String, bool), WriteError> {
         let cfg = DailyConfig::load(self);
         let path = cfg.path_for(date);
-        if !create || self.entry(&path).is_some() || self.abs(&path).exists() {
+        if !create || self.entry(&path).is_some() || self.exists(&path) {
             return Ok((path, false));
         }
         let body = self.template_text(&cfg.template).unwrap_or_default();
@@ -65,7 +65,7 @@ impl Index {
         let at = date.and_hms_opt(now.hour(), now.minute(), now.second()).unwrap();
         let title = crate::index::stem(&path).to_string();
         let text = expand_template(&body, &title, &at, &cfg.format);
-        atomic_write(&self.abs(&path), text.as_bytes())?;
+        self.store(&path, text.as_bytes())?;
         self.refresh(std::slice::from_ref(&path));
         Ok((path, true))
     }
@@ -76,7 +76,7 @@ impl Index {
             return None;
         }
         let rel = if FileKind::of(t) == FileKind::Note { t.to_string() } else { format!("{t}.md") };
-        std::fs::read_to_string(self.abs(&rel)).ok()
+        self.read_text(&rel).ok()
     }
 }
 

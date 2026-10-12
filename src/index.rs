@@ -85,8 +85,29 @@ pub struct Backlink<'a> {
     pub link: &'a Link,
 }
 
+/// One file an in-memory index wrote or removed through a write call
+/// ([`Index::take_written`]): what the host must persist, in order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Written {
+    Put(String),
+    Removed(String),
+}
+
+/// A vault held in memory rather than on disk ([`Index::in_memory`]): every
+/// file's bytes, hidden ones included so `.obsidian/` settings can be read,
+/// and the journal of what the write calls changed. The browser has no
+/// filesystem, so a web build keeps its vault this way and persists the
+/// journal itself.
+#[derive(Default)]
+struct Memory {
+    files: BTreeMap<String, Vec<u8>>,
+    journal: Vec<Written>,
+}
+
 pub struct Index {
     root: PathBuf,
+    /// `Some` for an in-memory vault, which never touches the filesystem.
+    mem: Option<Memory>,
     files: BTreeMap<String, Entry>,
     /// Lowercased basename → paths. Notes are keyed without `.md`, since
     /// `[[Beta]]` and `[[Beta.md]]` both mean `Beta.md`; every other file
@@ -152,6 +173,7 @@ impl Index {
     fn empty(root: PathBuf) -> Index {
         Index {
             root,
+            mem: None,
             files: BTreeMap::new(),
             by_name: HashMap::new(),
             by_lower: HashMap::new(),
@@ -159,6 +181,159 @@ impl Index {
             backlinks: HashMap::new(),
             cache_dirty: false,
             stats: BuildStats::default(),
+        }
+    }
+
+    /// An index over files held in memory, as (vault path, bytes). Nothing
+    /// it does touches the filesystem: reads come from these bytes, and the
+    /// write calls change them and record each change for
+    /// [`take_written`](Self::take_written). Hidden files are kept (so
+    /// `.obsidian/daily-notes.json` is read) but not indexed, as on disk.
+    pub fn in_memory<P: Into<String>>(files: impl IntoIterator<Item = (P, Vec<u8>)>) -> Index {
+        let mut index = Index::empty(PathBuf::new());
+        index.mem = Some(Memory::default());
+        index.put_files(files);
+        index
+    }
+
+    pub fn is_in_memory(&self) -> bool {
+        self.mem.is_some()
+    }
+
+    /// Replace or add files of an in-memory index from outside (a sync
+    /// download), re-linking once. Not journalled: the host already has
+    /// them. Unchanged bytes are skipped. An index on disk ignores this.
+    pub fn put_files<P: Into<String>>(&mut self, files: impl IntoIterator<Item = (P, Vec<u8>)>) -> Changes {
+        let Some(mem) = &mut self.mem else { return Changes::default() };
+        let mut rels = Vec::new();
+        for (rel, bytes) in files {
+            let rel: String = rel.into();
+            let rel = rel.trim_start_matches('/').to_string();
+            if mem.files.get(&rel) != Some(&bytes) {
+                mem.files.insert(rel.clone(), bytes);
+                rels.push(rel);
+            }
+        }
+        self.reread_memory(&rels)
+    }
+
+    /// Drop files of an in-memory index from outside (a sync deletion),
+    /// re-linking once. Not journalled. An index on disk ignores this.
+    pub fn remove_files<P: AsRef<str>>(&mut self, rels: impl IntoIterator<Item = P>) -> Changes {
+        let Some(mem) = &mut self.mem else { return Changes::default() };
+        let mut gone = Vec::new();
+        for rel in rels {
+            let rel = rel.as_ref().trim_start_matches('/');
+            if mem.files.remove(rel).is_some() {
+                gone.push(rel.to_string());
+            }
+        }
+        self.reread_memory(&gone)
+    }
+
+    /// The writes made since the last call, oldest first; empty on disk.
+    pub fn take_written(&mut self) -> Vec<Written> {
+        self.mem.as_mut().map(|m| std::mem::take(&mut m.journal)).unwrap_or_default()
+    }
+
+    /// Every file an in-memory index holds, hidden ones included; on disk,
+    /// the indexed files with no bytes.
+    pub fn memory_paths(&self) -> Vec<&str> {
+        match &self.mem {
+            Some(m) => m.files.keys().map(String::as_str).collect(),
+            None => Vec::new(),
+        }
+    }
+
+    /// Re-read these paths from memory: indexed when present and visible,
+    /// dropped when gone. One relink for the batch.
+    fn reread_memory(&mut self, rels: &[String]) -> Changes {
+        let mut changes = Changes::default();
+        let Some(mem) = &self.mem else { return changes };
+        for rel in rels {
+            if is_hidden(rel) {
+                continue;
+            }
+            match mem.files.get(rel) {
+                Some(bytes) => {
+                    let entry = entry_from_bytes(rel, bytes, 0, bytes.len() as u64);
+                    self.files.insert(rel.clone(), entry);
+                    changes.updated.push(rel.clone());
+                }
+                None => {
+                    if self.files.remove(rel).is_some() {
+                        changes.removed.push(rel.clone());
+                    }
+                }
+            }
+        }
+        if !changes.is_empty() {
+            changes.updated.sort();
+            changes.updated.dedup();
+            changes.removed.sort();
+            changes.removed.dedup();
+            self.relink();
+        }
+        changes
+    }
+
+    /// A file's bytes, from memory or from disk.
+    pub fn read_bytes(&self, rel: &str) -> io::Result<Vec<u8>> {
+        match &self.mem {
+            Some(m) => m.files.get(rel).cloned().ok_or_else(|| not_found(rel)),
+            None => std::fs::read(self.abs(rel)),
+        }
+    }
+
+    /// Whether a file exists, hidden or not, indexed or not.
+    pub(crate) fn exists(&self, rel: &str) -> bool {
+        match &self.mem {
+            Some(m) => m.files.contains_key(rel),
+            None => self.abs(rel).exists(),
+        }
+    }
+
+    /// Write a file: atomically on disk, or into memory and the journal.
+    pub(crate) fn store(&mut self, rel: &str, bytes: &[u8]) -> io::Result<()> {
+        match &mut self.mem {
+            Some(m) => {
+                m.files.insert(rel.to_string(), bytes.to_vec());
+                m.journal.push(Written::Put(rel.to_string()));
+                Ok(())
+            }
+            None => crate::write::atomic_write(&self.abs(rel), bytes),
+        }
+    }
+
+    /// Move a file, creating the destination's folders on disk.
+    pub(crate) fn relocate(&mut self, from: &str, to: &str) -> io::Result<()> {
+        match &mut self.mem {
+            Some(m) => {
+                let bytes = m.files.remove(from).ok_or_else(|| not_found(from))?;
+                m.files.insert(to.to_string(), bytes);
+                m.journal.push(Written::Removed(from.to_string()));
+                m.journal.push(Written::Put(to.to_string()));
+                Ok(())
+            }
+            None => {
+                let to_abs = self.abs(to);
+                if let Some(dir) = to_abs.parent() {
+                    std::fs::create_dir_all(dir)?;
+                }
+                std::fs::rename(self.abs(from), to_abs)
+            }
+        }
+    }
+
+    /// Remove a file.
+    pub(crate) fn unlink(&mut self, rel: &str) -> io::Result<()> {
+        match &mut self.mem {
+            Some(m) => {
+                m.files.remove(rel).ok_or_else(|| not_found(rel))?;
+                m.journal.push(Written::Removed(rel.to_string()));
+                Ok(())
+            }
+            None => std::fs::remove_file(self.abs(rel)),
         }
     }
 
@@ -479,6 +654,9 @@ impl Index {
     /// Record a file this process just wrote, so the watcher's echo of the
     /// write is recognised as already applied.
     pub(crate) fn refresh(&mut self, rels: &[String]) -> Changes {
+        if self.mem.is_some() {
+            return self.reread_memory(rels);
+        }
         let paths: Vec<PathBuf> = rels.iter().map(|r| self.abs(r)).collect();
         self.apply_changes(&paths)
     }
@@ -530,6 +708,10 @@ where
     T: Send,
     F: Fn(&I) -> Option<T> + Sync,
 {
+    // No threads in the browser: std's spawn panics there.
+    if cfg!(target_arch = "wasm32") {
+        return items.iter().filter_map(&f).collect();
+    }
     let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).min(8);
     if items.len() < 64 || threads < 2 {
         return items.iter().filter_map(&f).collect();
@@ -558,18 +740,23 @@ fn stamp(meta: &std::fs::Metadata) -> (u64, u64) {
 }
 
 fn read_entry(abs: &Path, rel: &str, mtime: u64, size: u64) -> Entry {
+    if FileKind::of(rel) == FileKind::Attachment {
+        return entry_from_bytes(rel, &[], mtime, size);
+    }
+    let bytes = std::fs::read(abs).unwrap_or_else(|e| {
+        log::warn!("cannot read {}: {e}", abs.display());
+        Vec::new()
+    });
+    entry_from_bytes(rel, &bytes, mtime, size)
+}
+
+/// A file's entry from its bytes (attachments are not read at all).
+fn entry_from_bytes(rel: &str, bytes: &[u8], mtime: u64, size: u64) -> Entry {
     let kind = FileKind::of(rel);
     let note = match kind {
         FileKind::Attachment => None,
         _ => {
-            let text = match std::fs::read(abs) {
-                Ok(bytes) => String::from_utf8(bytes)
-                    .unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned()),
-                Err(e) => {
-                    log::warn!("cannot read {}: {e}", abs.display());
-                    String::new()
-                }
-            };
+            let text = String::from_utf8_lossy(bytes);
             Some(match kind {
                 FileKind::Canvas => match canvas::from_str(&text) {
                     Ok(c) => canvas::index(&c),
@@ -610,6 +797,15 @@ fn walk(root: &Path, dir: &Path) -> io::Result<Vec<(String, PathBuf)>> {
         out.push((rel.replace('\\', "/"), entry.path().to_path_buf()));
     }
     Ok(out)
+}
+
+/// Any component starting with `.` (`.obsidian`, `.trash`): not indexed.
+fn is_hidden(rel: &str) -> bool {
+    rel.split('/').any(|c| c.starts_with('.'))
+}
+
+fn not_found(rel: &str) -> io::Error {
+    io::Error::new(io::ErrorKind::NotFound, format!("no such file in the vault: {rel}"))
 }
 
 fn extension(path: &str) -> Option<&str> {
