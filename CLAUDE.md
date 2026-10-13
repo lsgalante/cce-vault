@@ -16,7 +16,8 @@ batches on its own event loop. The files are the source of truth.
 
 | Module | What it owns |
 | --- | --- |
-| `parse` | One note → properties, links, tags, headings, block ids, tasks, all with byte spans; a task's due date (`📅 2026-10-20`, or `due 2026-10-20` / `[due:: …]` by hand) via `split_due` |
+| `parse` | One note → properties, links, tags, headings, block ids, tasks, all with byte spans; a task's due date (`📅 2026-10-20`, or `due 2026-10-20` / `[due:: …]` by hand) via `split_due`. Its tag rule, external-link test and frontmatter (`Properties`, `parse_properties`, `frontmatter_range`, `LineIndex`) are `cce_core::markdown`'s, re-exported here |
+| `markdown` | Re-export of `cce_core::markdown` (its `markdown` feature): a note as a reading view needs it (`blocks` → `Block`s of styled `Span`s) and the leaf rules shared with cce-ui's `MarkdownView` and `DocEditor` |
 | `index` | Every file, link resolution, backlinks, unresolved links, tags, tasks; the optional parse cache; the in-memory mode (`Index::in_memory`) |
 | `watch` | Recursive `notify` watcher, debounced (150 ms quiet, 1 s cap), hidden paths dropped |
 | `search` | Fuzzy names (quick switcher), full-text scan, unlinked mentions |

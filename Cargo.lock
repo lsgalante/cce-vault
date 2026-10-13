@@ -48,11 +48,15 @@ dependencies = [
 [[package]]
 name = "cce-core"
 version = "0.1.0"
-source = "git+https://github.com/lsgalante/cce-core.git?rev=5b8dcb30f1b0d7d607ab49d637069560eca0cb14#5b8dcb30f1b0d7d607ab49d637069560eca0cb14"
+source = "git+https://github.com/lsgalante/cce-core.git?rev=388473078207ff41208e8648c04499e94632f20a#388473078207ff41208e8648c04499e94632f20a"
 dependencies = [
+ "indexmap",
  "libc",
  "log",
+ "pulldown-cmark",
+ "serde_json",
  "web-time",
+ "yaml-rust2",
 ]
 
 [[package]]
@@ -65,13 +69,11 @@ dependencies = [
  "kdl",
  "log",
  "notify",
- "percent-encoding",
  "pulldown-cmark",
  "serde",
  "serde_json",
  "tempfile",
  "walkdir",
- "yaml-rust2",
 ]
 
 [[package]]
@@ -425,12 +427,6 @@ name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
-
-[[package]]
-name = "percent-encoding"
-version = "2.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 
 [[package]]
 name = "pin-project-lite"

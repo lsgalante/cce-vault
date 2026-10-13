@@ -36,7 +36,10 @@ pub mod canvas;
 pub mod config;
 pub mod daily;
 pub mod index;
-pub mod markdown;
+/// A note as a reading view needs it, and the leaf rules of Obsidian's
+/// Markdown: `cce_core::markdown`, shared with cce-ui's `MarkdownView` and
+/// `DocEditor`, re-exported here at its old path.
+pub use cce_core::markdown;
 #[cfg(unix)]
 pub mod notes_ipc;
 pub mod parse;

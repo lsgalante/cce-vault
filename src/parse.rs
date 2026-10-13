@@ -21,13 +21,14 @@ use std::ops::Range;
 use chrono::NaiveDate;
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
+use serde_json::Value;
 
-/// Frontmatter properties, in file order. An `IndexMap` rather than
-/// `serde_json`'s `preserve_order` feature, which would unify across the
-/// workspace and reorder every other crate's JSON (see `canvas`). Maps
-/// nested inside a value are ordinary sorted `serde_json` maps.
-pub type Properties = indexmap::IndexMap<String, Value>;
+// Frontmatter properties (`Properties`, `parse_properties`), the fences
+// (`frontmatter_range`) and `LineIndex` are shared with the reading view and
+// the DocEditor; they live in `cce_core::markdown`.
+pub use cce_core::markdown::{frontmatter_range, parse_properties, LineIndex, Properties};
+use cce_core::fmt::percent_decode as decode;
+use cce_core::markdown::{is_url, tag_name};
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Note {
@@ -218,75 +219,6 @@ pub fn parse(src: &str) -> Note {
     note
 }
 
-/// `---\n...\n---` at the very top of the file: (whole block, inner YAML).
-pub fn frontmatter_range(src: &str) -> Option<(Range<usize>, Range<usize>)> {
-    let first_end = src.find('\n')?;
-    if src[..first_end].trim_end_matches('\r') != "---" {
-        return None;
-    }
-    let inner_start = first_end + 1;
-    let mut pos = inner_start;
-    while pos <= src.len() {
-        let end = src[pos..].find('\n').map(|i| pos + i).unwrap_or(src.len());
-        if src[pos..end].trim_end_matches('\r') == "---" {
-            let whole_end = if end < src.len() { end + 1 } else { end };
-            return Some((0..whole_end, inner_start..pos));
-        }
-        if end == src.len() {
-            break;
-        }
-        pos = end + 1;
-    }
-    None
-}
-
-/// YAML → JSON values. A block that does not parse, or is not a mapping,
-/// yields no properties rather than an error: Obsidian shows such a note
-/// with its frontmatter as plain text, and the index should still hold it.
-pub fn parse_properties(yaml: &str) -> Properties {
-    let docs = match yaml_rust2::YamlLoader::load_from_str(yaml) {
-        Ok(docs) => docs,
-        Err(_) => return Properties::new(),
-    };
-    match docs.into_iter().next() {
-        Some(yaml_rust2::Yaml::Hash(h)) => h
-            .into_iter()
-            .filter_map(|(k, v)| Some((yaml_key(k)?, yaml_to_json(v))))
-            .collect(),
-        _ => Properties::new(),
-    }
-}
-
-fn yaml_key(k: yaml_rust2::Yaml) -> Option<String> {
-    use yaml_rust2::Yaml;
-    match k {
-        Yaml::String(s) | Yaml::Real(s) => Some(s),
-        Yaml::Integer(i) => Some(i.to_string()),
-        Yaml::Boolean(b) => Some(b.to_string()),
-        _ => None,
-    }
-}
-
-fn yaml_to_json(y: yaml_rust2::Yaml) -> Value {
-    use yaml_rust2::Yaml;
-    match y {
-        Yaml::Real(s) => s
-            .parse::<f64>()
-            .ok()
-            .and_then(serde_json::Number::from_f64)
-            .map(Value::Number)
-            .unwrap_or(Value::String(s)),
-        Yaml::Integer(i) => Value::from(i),
-        Yaml::String(s) => Value::String(s),
-        Yaml::Boolean(b) => Value::Bool(b),
-        Yaml::Array(a) => Value::Array(a.into_iter().map(yaml_to_json).collect()),
-        Yaml::Hash(h) => Value::Object(
-            h.into_iter().filter_map(|(k, v)| Some((yaml_key(k)?, yaml_to_json(v)))).collect::<Map<_, _>>(),
-        ),
-        Yaml::Null | Yaml::Alias(_) | Yaml::BadValue => Value::Null,
-    }
-}
-
 /// `tags` (or the older `tag`) as a list, or as one string split on commas
 /// and whitespace. A leading `#` is tolerated and dropped.
 fn property_tags(props: &Properties) -> Vec<String> {
@@ -343,25 +275,6 @@ impl Ranges {
         // starts at or before `pos` may hold it. A note has a few dozen.
         let idx = self.0.partition_point(|r| r.start <= pos);
         self.0[..idx].iter().any(|r| r.contains(&pos))
-    }
-}
-
-/// Byte offset → 0-based line.
-pub struct LineIndex {
-    starts: Vec<usize>,
-}
-
-impl LineIndex {
-    pub fn new(src: &str) -> Self {
-        let mut starts = vec![0];
-        starts.extend(src.match_indices('\n').map(|(i, _)| i + 1));
-        LineIndex { starts }
-    }
-    pub fn line_of(&self, pos: usize) -> usize {
-        self.starts.partition_point(|&s| s <= pos) - 1
-    }
-    pub fn start_of(&self, line: usize) -> usize {
-        self.starts.get(line).copied().unwrap_or(0)
     }
 }
 
@@ -494,7 +407,7 @@ fn markdown_link(src: &str, range: Range<usize>, embed: bool, lines: &LineIndex)
         (d, e.min(text.len()))
     };
     let raw_dest = &text[dest_start..dest_end];
-    if raw_dest.is_empty() || is_external(raw_dest) {
+    if raw_dest.is_empty() || is_url(raw_dest) {
         return None;
     }
     let (path_raw, subpath) = match raw_dest.find('#') {
@@ -516,22 +429,6 @@ fn markdown_link(src: &str, range: Range<usize>, embed: bool, lines: &LineIndex)
         line: lines.line_of(range.start),
         node: None,
     })
-}
-
-fn decode(s: &str) -> String {
-    percent_encoding::percent_decode_str(s).decode_utf8_lossy().into_owned()
-}
-
-/// A destination that leaves the vault: any `scheme:` (http, mailto,
-/// obsidian://, file:) — but not a Windows drive letter, which nobody writes
-/// in a vault link anyway.
-fn is_external(dest: &str) -> bool {
-    match dest.find(':') {
-        Some(c) if c > 1 => dest[..c]
-            .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || ch == '+' || ch == '-' || ch == '.'),
-        _ => false,
-    }
 }
 
 fn is_tag_char(c: char) -> bool {
@@ -558,12 +455,9 @@ fn scan_tags(
             continue;
         }
         let rest = &src[i + 1..];
-        let len: usize = rest.chars().take_while(|&c| is_tag_char(c)).map(char::len_utf8).sum();
-        let name = rest[..len].trim_end_matches('/');
-        if name.is_empty() || name.chars().all(|c| c.is_ascii_digit() || c == '/') {
-            continue;
-        }
+        let Some(name) = tag_name(rest) else { continue };
         out.push(NoteTag { name: name.to_string(), line: Some(lines.line_of(i)) });
+        let len: usize = rest.chars().take_while(|&c| is_tag_char(c)).map(char::len_utf8).sum();
         // Skip past the tag so `#a#b` yields one tag, as Obsidian reads it.
         while iter.peek().is_some_and(|&(j, _)| j <= i + len) {
             prev = iter.next().map(|(_, c)| c);
