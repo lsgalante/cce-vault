@@ -1,11 +1,13 @@
 # cce-vault
 
-The notes vault shared by cce apps: a folder of Markdown notes, canvases
-and attachments, kept **byte-compatible with Obsidian** so the real app can
-keep working on the same files. This crate is everything about that folder
-that is not UI. It is milestone 1 of the Obsidian-on-cce plan; the apps
-that sit on it (`cce-notes`, a vault mode in `cce-graph`, note cards on
-`cce-grid`, vault tasks in `cce-list`) come later.
+The notes vault shared by cce apps: a folder of Markdown notes (wikilinks,
+embeds, `#tags`, frontmatter, `- [ ]` tasks), JSON Canvas boards and
+attachments, with its settings in `.cce/vault.kdl`. This crate is
+everything about that folder that is not UI; `cce-notes`, `cce-graph`,
+`cce-grid`, `cce-list`, `cce-vault-web` and cce-sync's MCP tools sit on it.
+The vault started as an Obsidian vault and the syntax stays (old notes stay
+valid), but Obsidian is no longer a client: the rules below are this
+crate's own spec, and nothing reads or writes `.obsidian/`.
 
 It has **no cce-ui dependency** on purpose. The `cce-vault` CLI, tests and
 any non-GUI tool use it without a Wayland stack. There is **no daemon**:
@@ -22,15 +24,19 @@ batches on its own event loop. The files are the source of truth.
 | `watch` | Recursive `notify` watcher, debounced (150 ms quiet, 1 s cap), hidden paths dropped |
 | `search` | Fuzzy names (quick switcher), full-text scan, unlinked mentions |
 | `write` | `atomic_write`, create/append, `set_task`, `rename` with link rewrite |
-| `canvas` | JSON Canvas as `serde_json::Value`, written byte-exact with Obsidian |
-| `daily` | Daily notes from `.obsidian/daily-notes.json`; moment.js formats; template variables |
+| `canvas` | JSON Canvas as `serde_json::Value`, written byte-exact in the files' layout |
+| `settings` | The vault's settings, `.cce/vault.kdl`: `daily { folder format template }`, `attachments { folder }`, `templates { folder }` |
+| `daily` | Daily notes from `daily { … }` in the settings; moment.js formats; template variables |
+| `attachments` | Where a new attachment goes (`attachments { folder }`), and numbering a name clash |
+| `events` | Notes about calendar events: found by their `event: <calendar>/<id>` property (`note_for`, wherever the note moved), made as `Meetings/<date> <title>.md` (`create_note`) |
+| `agenda` | A note's ```` ```agenda ```` blocks: which day each asks for (a date in the block, else the daily note's own, `DailyConfig::date_of`) and filling them with lines after parsing, so no line moves. The lines come from cce-sync's Google bridge; the file keeps the block empty |
 | `config` | The vault root: `--vault`, `$CCE_VAULT`, then `vault { path "…" }` in `~/.config/cce/config.kdl` |
 | `notes_ipc` | The cce-notes instance protocol (`open`/`daily`/`search`/`show`, the `current`/`vault` queries) and `open`, the bounded off-thread hand-off cce-graph, cce-grid and cce-list use (unix only; on cce-core's socket convention) |
 | `main.rs` | The `cce-vault` CLI (`cce-vault --help`) |
 
 ## Invariants — each was a design decision, keep them
 
-- **Obsidian syntax is scanned from raw bytes; pulldown-cmark only marks
+- **The vault's syntax is scanned from raw bytes; pulldown-cmark only marks
   code.** pulldown decides what is code/math and finds headings and inline
   `[text](dest)` links. Wikilinks, embeds, `#tags`, `^block` ids,
   `%%comments%%` and task statuses are scanned by hand outside those
@@ -38,23 +44,25 @@ batches on its own event loop. The files are the source of truth.
   rename rewrites. pulldown's own `ENABLE_WIKILINKS` stays **off**: it knows
   neither `![[embed]]` nor the `\|` escape inside tables.
 - **Every write re-reads and re-parses the file it edits.** The index may
-  be a watcher batch behind (Obsidian or a sync client wrote a second ago),
+  be a watcher batch behind (a sync client wrote a second ago),
   and a span from a stale parse cuts the wrong bytes. `set_task` and
   `rename` both do this. Do not "optimise" it into using the index's copy.
-- **Resolution follows Obsidian**, case-insensitive throughout: an exact
+- **Link resolution**, case-insensitive throughout: an exact
   vault path first (relative to the note first for a *markdown* link; a
   leading `/` is always the vault root), then by file name with the link's
   folder part as a path suffix, preferring the linking note's own folder,
   then the shortest path, then alphabetical. Aliases do **not** resolve
-  links, as in Obsidian. `[[Beta]]` and `[[Beta.md]]` both mean `Beta.md`;
+  links. (These are the rules the vault's links were written under, kept
+  unchanged so no old link moves.) `[[Beta]]` and `[[Beta.md]]` both mean `Beta.md`;
   every other file keeps its extension (`[[pic.png]]`, `[[Board.canvas]]`).
 - **Relink is whole-vault after any change batch.** Adding `Beta.md` must
   turn every unresolved `[[Beta]]` anywhere into a backlink, and it costs
   ~21 ms for 100,000 links. Don't make it incremental without a benchmark.
 - **Hidden means ignored**: any path component starting with `.`
-  (`.obsidian`, `.trash`, `.git`, and this crate's own `.name.PID.cce-tmp`
-  write temps). The walk, `Index::rel` and the watcher all apply it.
-  `.obsidian/` is read (daily-note settings) and **never written**.
+  (`.cce`, `.trash`, `.git`, a leftover `.obsidian`, and this crate's own
+  `.name.PID.cce-tmp` write temps). The walk, `Index::rel` and the watcher
+  all apply it. `.cce/vault.kdl` is read (the settings) and **never
+  written** here; `.obsidian/` is not read at all.
 - **A vault can live in memory** (`Index::in_memory(files)`), for the
   browser, which has no filesystem (`cce-vault-web`). Every read and write
   goes through `Index`'s storage helpers (`read_bytes` / `read_text`,
@@ -63,12 +71,12 @@ batches on its own event loop. The files are the source of truth.
   in-memory vault silently reads nothing. Write calls journal what they
   changed (`take_written`, `Written::Put` / `Removed`) for the host to
   persist; outside changes come in through `put_files` / `remove_files`,
-  unjournalled. Hidden files are held (so `.obsidian/` settings are read)
+  unjournalled. Hidden files are held (so `.cce/vault.kdl` is read)
   but not indexed. `memory_vault_matches_disk` runs the same edits on
   both modes and compares every file. `par_map` runs single-threaded on
   wasm32, where std cannot spawn.
 - **Canvases are `Value`s with `preserve_order`, never typed structs**, and
-  `canvas::to_string` reproduces Obsidian's layout (tab indent, one compact
+  `canvas::to_string` reproduces the files' layout (tab indent, one compact
   node per line, no trailing newline). A rename that touches a canvas must
   diff as the one field it changed. The ignored test
   `real_canvases_round_trip` checks real files:

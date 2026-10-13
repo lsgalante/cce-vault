@@ -2,7 +2,7 @@
 name = "cce-vault"
 version = "0.1.0"
 edition = "2021"
-description = "The notes vault shared by cce apps: Obsidian-compatible Markdown parsing, link index, watcher, search and writes"
+description = "The notes vault shared by cce apps: Markdown parsing with wikilinks, link index, watcher, search and writes"
 
 [lib]
 name = "cce_vault"

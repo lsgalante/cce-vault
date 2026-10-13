@@ -3,7 +3,7 @@
 //!
 //! Every edit re-reads the file it changes and re-parses it at that moment
 //! rather than trusting the index's copy. The index may be a watcher batch
-//! behind — Obsidian or a sync client may have written the file a second
+//! behind — a sync client or another app may have written the file a second
 //! ago — and a byte span taken from a stale parse would cut the wrong text.
 
 use std::io;
@@ -46,7 +46,7 @@ impl From<io::Error> for WriteError {
 }
 
 /// Write via a hidden temp file in the same folder and a rename, so a
-/// reader (Obsidian, a sync client, another cce app) never sees half a
+/// reader (a sync client, another cce app) never sees half a
 /// file. The temp name starts with `.` so the vault walk and the watcher
 /// both ignore it.
 pub fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
@@ -193,7 +193,7 @@ impl Index {
     }
 
     /// Delete a file. Links to it are left as they are (they become
-    /// unresolved), as Obsidian leaves them.
+    /// unresolved).
     pub fn delete(&mut self, path: &str) -> Result<(), WriteError> {
         if !self.exists(path) {
             return Err(WriteError::NotFound(path.to_string()));
@@ -813,7 +813,7 @@ mod tests {
     #[test]
     fn memory_vault_matches_disk() {
         let files: &[(&str, &str)] = &[
-            (".obsidian/daily-notes.json", r#"{"folder":"Daily","template":"Templates/Day"}"#),
+            (".cce/vault.kdl", "daily { folder \"Daily\"; template \"Templates/Day\"; }\n"),
             ("Templates/Day.md", "# {{title}}\n"),
             ("Old.md", "self: [[Old#Top]]\n- [ ] one\n- [ ] two\n"),
             ("notes/A.md", "[[Old]] [md](../Old.md) [[Other]]\n- [ ] here\n"),
@@ -859,9 +859,9 @@ mod tests {
     /// that appears resolves the links that were waiting for it.
     #[test]
     fn memory_vault_takes_outside_changes() {
-        let mut ix = Index::in_memory([("A.md", b"[[B]]".to_vec()), (".obsidian/app.json", b"{}".to_vec())]);
+        let mut ix = Index::in_memory([("A.md", b"[[B]]".to_vec()), (".cce/vault.kdl", b"".to_vec())]);
         assert_eq!(ix.files().len(), 1, "hidden files are kept but not indexed");
-        assert!(ix.read_text(".obsidian/app.json").is_ok());
+        assert!(ix.read_text(".cce/vault.kdl").is_ok());
         assert!(ix.backlinks("B.md").is_empty());
 
         let changes = ix.put_files([("B.md", b"back to [[A]]".to_vec())]);

@@ -229,7 +229,7 @@ impl Index {
 
     /// Places in other notes that name `path` (by its name or an alias) as
     /// a whole word, outside any link, code or frontmatter — the "unlinked
-    /// mentions" Obsidian offers to turn into links.
+    /// mentions" worth turning into links.
     pub fn unlinked_mentions(&self, path: &str) -> Vec<FileHits> {
         let mut names = vec![stem(path).to_lowercase()];
         if let Some(note) = self.note(path) {

@@ -1,12 +1,12 @@
-//! JSON Canvas (<https://jsoncanvas.org>), the format behind Obsidian's
+//! JSON Canvas (<https://jsoncanvas.org>), the open format of the vault's
 //! `.canvas` files and — from milestone 5 — the cce desktop's own boards.
 //!
 //! A canvas is held as ordered fields whose values stay as the raw JSON
 //! text they were read from (`serde_json::value::RawValue`), never as typed
 //! structs or a parsed `Value`. A write must give back every key it did not
 //! touch, in its original order and with its original number formatting,
-//! including keys a newer Obsidian adds. [`to_string`] reproduces
-//! Obsidian's layout byte for byte (tabs, one compact node per line, no
+//! including keys this crate does not know. [`to_string`] reproduces
+//! the files' layout byte for byte (tabs, one compact node per line, no
 //! trailing newline), so a rename touching a canvas shows up in a diff as
 //! the one field it changed.
 //!
@@ -90,7 +90,7 @@ impl Object {
     }
 
     /// Set a number field, written as an integer when it is whole (as
-    /// Obsidian writes coordinates). A value equal to the one there is left
+    /// the files write coordinates). A value equal to the one there is left
     /// alone, so an untouched field keeps its original formatting.
     pub fn set_num(&mut self, key: &str, value: f64) {
         if !value.is_finite() || self.num(key) == Some(value) {
@@ -155,7 +155,7 @@ pub fn from_str(src: &str) -> Result<Canvas, CanvasError> {
     Ok(Canvas { fields })
 }
 
-/// Obsidian's layout: `JSON.stringify` with a tab indent at the top level
+/// The files' layout: `JSON.stringify` with a tab indent at the top level
 /// and each array element compact on its own line.
 pub fn to_string(canvas: &Canvas) -> String {
     let mut out = String::from("{\n");
@@ -190,7 +190,7 @@ pub fn to_string(canvas: &Canvas) -> String {
 }
 
 impl Canvas {
-    /// `{"nodes":[],"edges":[]}`, as Obsidian starts a new canvas.
+    /// `{"nodes":[],"edges":[]}`, a new canvas.
     pub fn empty() -> Canvas {
         Canvas { fields: vec![("nodes".into(), Field::Objects(Vec::new())), ("edges".into(), Field::Objects(Vec::new()))] }
     }

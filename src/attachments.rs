@@ -1,13 +1,11 @@
-//! Where a new attachment goes: Obsidian's "Default location for new
-//! attachments" (Settings → Files and links), stored as
-//! `attachmentFolderPath` in `.obsidian/app.json`, so a file another app
-//! adds to the vault lands where Obsidian would have put it.
+//! Where a new attachment goes: `attachments { folder "…" }` in the
+//! vault's settings (`.cce/vault.kdl`, see [`crate::settings`]).
 //!
-//! The setting's forms, as Obsidian reads them:
+//! The setting's forms:
 //!
 //! | value | folder |
 //! | --- | --- |
-//! | missing, `""` or `/` | the vault root (Obsidian's default) |
+//! | missing, `""` or `/` | the vault root (the default) |
 //! | `./` | the folder of the note (or canvas) it is for |
 //! | `./sub` | `sub` inside that folder |
 //! | `Some/Folder` | that folder, from the vault root |
@@ -17,12 +15,7 @@ use std::path::{Path, PathBuf};
 /// The vault folder (vault-relative, `""` for the root) that a new
 /// attachment for the vault file `for_file` goes in.
 pub fn folder(root: &Path, for_file: &str) -> String {
-    let setting = std::fs::read_to_string(root.join(".obsidian/app.json"))
-        .ok()
-        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
-        .and_then(|v| v.get("attachmentFolderPath")?.as_str().map(str::to_string))
-        .unwrap_or_default();
-    folder_for(&setting, for_file)
+    folder_for(&crate::settings::Settings::read(root).attachments_folder, for_file)
 }
 
 /// [`folder`] for a setting already read.
@@ -38,8 +31,7 @@ pub fn folder_for(setting: &str, for_file: &str) -> String {
 }
 
 /// An absolute path in `dir` for a file named `name` that does not exist
-/// yet: `name`, else `name 1`, `name 2`, … before the extension, the way
-/// Obsidian numbers a clash.
+/// yet: `name`, else `name 1`, `name 2`, … before the extension.
 pub fn unique_path(dir: &Path, name: &str) -> PathBuf {
     let first = dir.join(name);
     if !first.exists() {
@@ -71,12 +63,12 @@ mod tests {
     }
 
     #[test]
-    fn reads_app_json_and_numbers_clashes() {
+    fn reads_the_vault_settings_and_numbers_clashes() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
         assert_eq!(folder(root, "Desktop.canvas"), "");
-        std::fs::create_dir_all(root.join(".obsidian")).unwrap();
-        std::fs::write(root.join(".obsidian/app.json"), r#"{"attachmentFolderPath":"Attachments"}"#).unwrap();
+        std::fs::create_dir_all(root.join(".cce")).unwrap();
+        std::fs::write(root.join(".cce/vault.kdl"), "attachments { folder \"Attachments\"; }\n").unwrap();
         assert_eq!(folder(root, "Desktop.canvas"), "Attachments");
         std::fs::write(root.join("pic.png"), b"x").unwrap();
         std::fs::write(root.join("pic 1.png"), b"x").unwrap();
