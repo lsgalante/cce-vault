@@ -28,6 +28,7 @@ batches on its own event loop. The files are the source of truth.
 | `settings` | The vault's settings, `.cce/vault.kdl`: `daily { folder format template }`, `attachments { folder }`, `templates { folder }` |
 | `daily` | Daily notes from `daily { … }` in the settings; moment.js formats; template variables |
 | `attachments` | Where a new attachment goes (`attachments { folder }`), and numbering a name clash |
+| `events` | Notes about calendar events: found by their `event: <calendar>/<id>` property (`note_for`, wherever the note moved), made as `Meetings/<date> <title>.md` (`create_note`) |
 | `agenda` | A note's ```` ```agenda ```` blocks: which day each asks for (a date in the block, else the daily note's own, `DailyConfig::date_of`) and filling them with lines after parsing, so no line moves. The lines come from cce-sync's Google bridge; the file keeps the block empty |
 | `config` | The vault root: `--vault`, `$CCE_VAULT`, then `vault { path "…" }` in `~/.config/cce/config.kdl` |
 | `notes_ipc` | The cce-notes instance protocol (`open`/`daily`/`search`/`show`, the `current`/`vault` queries) and `open`, the bounded off-thread hand-off cce-graph, cce-grid and cce-list use (unix only; on cce-core's socket convention) |

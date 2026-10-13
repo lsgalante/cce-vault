@@ -15,6 +15,7 @@
 //! - [`canvas`]: JSON Canvas read and write, byte-exact with the files.
 //! - [`daily`]: daily notes from the vault's settings and templates.
 //! - [`settings`]: the vault's settings, `.cce/vault.kdl`.
+//! - [`events`]: notes about calendar events (`event:` in frontmatter).
 //! - [`agenda`]: a note's ```` ```agenda ```` blocks, filled when drawn.
 //! - [`markdown`]: a note as styled blocks and spans, for reading views.
 //! - [`config`]: where the vault is (`CCE_VAULT`, or `vault { path }` in
@@ -39,6 +40,7 @@ pub mod attachments;
 pub mod canvas;
 pub mod config;
 pub mod daily;
+pub mod events;
 pub mod index;
 /// A note as a reading view needs it, and the leaf rules of the vault's
 /// Markdown: `cce_core::markdown`, shared with cce-ui's `MarkdownView` and
