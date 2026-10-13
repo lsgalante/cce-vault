@@ -4,7 +4,7 @@
 //! The split of labour is deliberate. pulldown-cmark knows CommonMark, so it
 //! decides what is code (fenced, indented, inline), what is math, where the
 //! headings are and where the inline `[text](dest)` links are. Everything
-//! Obsidian adds on top — `[[wikilinks]]`, `![[embeds]]`, `#tags`, `^block`
+//! the vault adds on top — `[[wikilinks]]`, `![[embeds]]`, `#tags`, `^block`
 //! ids, `%%comments%%`, task statuses other than `x` — is scanned from the
 //! raw bytes by hand, skipping the ranges pulldown called code. Scanning raw
 //! text rather than pulldown's `Text` events is what gives every link an
@@ -139,7 +139,7 @@ pub fn parse(src: &str) -> Note {
         note.tags.push(NoteTag { name, line: None });
     }
 
-    // Everything code-like is invisible to the Obsidian scanners.
+    // Everything code-like is invisible to the vault-syntax scanners.
     let mut excluded: Vec<Range<usize>> = Vec::new();
     let mut md_links: Vec<Link> = Vec::new();
     let mut heading: Option<(u8, usize, String)> = None;
@@ -205,8 +205,8 @@ pub fn parse(src: &str) -> Note {
         at >= body_start && !comment_skip.contains(at)
     });
 
-    // Wikilinks are scanned over the frontmatter too: Obsidian indexes a
-    // `related: "[[Other]]"` property as a link.
+    // Wikilinks are scanned over the frontmatter too: a
+    // `related: "[[Other]]"` property is a link.
     let wikis = wikilinks(src, &skip, &lines);
     let mut links: Vec<Link> = wikis;
     links.extend(md_links.into_iter().filter(|l| !skip.contains(l.span.start)));
@@ -279,7 +279,7 @@ impl Ranges {
 }
 
 /// `%%...%%` comments outside code; an unclosed one runs to the end of the
-/// file, as Obsidian renders it.
+/// file.
 fn comment_ranges(src: &str, from: usize, code: &[Range<usize>]) -> Vec<Range<usize>> {
     let code = Ranges(code.to_vec());
     let mut out = Vec::new();
@@ -458,7 +458,7 @@ fn scan_tags(
         let Some(name) = tag_name(rest) else { continue };
         out.push(NoteTag { name: name.to_string(), line: Some(lines.line_of(i)) });
         let len: usize = rest.chars().take_while(|&c| is_tag_char(c)).map(char::len_utf8).sum();
-        // Skip past the tag so `#a#b` yields one tag, as Obsidian reads it.
+        // Skip past the tag so `#a#b` yields one tag.
         while iter.peek().is_some_and(|&(j, _)| j <= i + len) {
             prev = iter.next().map(|(_, c)| c);
         }
@@ -495,8 +495,8 @@ fn scan_lines(src: &str, from: usize, skip: &Ranges, lines: &LineIndex, note: &m
     }
 }
 
-/// What a due date is written after: the Obsidian Tasks plugin's marker,
-/// which is what cce writes ([`with_due`]).
+/// What a due date is written after: the 📅 marker the vault's tasks have
+/// always used, which is what cce writes ([`with_due`]).
 pub const DUE_MARK: &str = "📅";
 
 /// A task text's due date, and the text without it. Read: `📅 2026-10-20`

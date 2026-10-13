@@ -30,7 +30,7 @@ pub struct VaultWatcher {
 impl VaultWatcher {
     /// Watch `root` recursively. `on_change` receives each batch of
     /// absolute paths, deduplicated and sorted, with anything in a hidden
-    /// folder or hidden file (`.obsidian/`, `.trash/`, this crate's own
+    /// folder or hidden file (`.cce/`, `.trash/`, this crate's own
     /// `.name.cce-tmp` files) already dropped.
     pub fn spawn<F>(root: &Path, mut on_change: F) -> notify::Result<VaultWatcher>
     where
@@ -101,8 +101,8 @@ mod tests {
         let sink = seen.clone();
         let _w = VaultWatcher::spawn(&root, move |b| sink.lock().unwrap().push(b)).unwrap();
 
-        std::fs::create_dir_all(root.join(".obsidian")).unwrap();
-        std::fs::write(root.join(".obsidian/app.json"), "{}").unwrap();
+        std::fs::create_dir_all(root.join(".cce")).unwrap();
+        std::fs::write(root.join(".cce/vault.kdl"), "").unwrap();
         crate::write::atomic_write(&root.join("sub/Note.md"), b"hello").unwrap();
         std::fs::write(root.join("Other.md"), "x").unwrap();
 

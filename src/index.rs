@@ -94,7 +94,7 @@ pub enum Written {
 }
 
 /// A vault held in memory rather than on disk ([`Index::in_memory`]): every
-/// file's bytes, hidden ones included so `.obsidian/` settings can be read,
+/// file's bytes, hidden ones included so `.cce/vault.kdl` can be read,
 /// and the journal of what the write calls changed. The browser has no
 /// filesystem, so a web build keeps its vault this way and persists the
 /// journal itself.
@@ -188,7 +188,7 @@ impl Index {
     /// it does touches the filesystem: reads come from these bytes, and the
     /// write calls change them and record each change for
     /// [`take_written`](Self::take_written). Hidden files are kept (so
-    /// `.obsidian/daily-notes.json` is read) but not indexed, as on disk.
+    /// `.cce/vault.kdl` is read) but not indexed, as on disk.
     pub fn in_memory<P: Into<String>>(files: impl IntoIterator<Item = (P, Vec<u8>)>) -> Index {
         let mut index = Index::empty(PathBuf::new());
         index.mem = Some(Memory::default());
@@ -346,7 +346,7 @@ impl Index {
     }
 
     /// The vault-relative path of an absolute one, or `None` when it is
-    /// outside the vault or inside a hidden folder (`.obsidian`, `.trash`).
+    /// outside the vault or inside a hidden folder (`.cce`, `.trash`).
     pub fn rel(&self, abs: &Path) -> Option<String> {
         let rel = abs.strip_prefix(&self.root).ok()?;
         let mut parts = Vec::new();
@@ -468,11 +468,10 @@ impl Index {
         self.backlinks = backlinks;
     }
 
-    /// Where a link in `from` points, following Obsidian's rules: an exact
+    /// Where a link in `from` points: an exact
     /// vault path first (relative to the note for a markdown link), then
     /// the file whose name matches, preferring one in the linking note's
-    /// own folder and then the shortest path. Case-insensitive throughout,
-    /// as Obsidian is.
+    /// own folder and then the shortest path. Case-insensitive throughout.
     pub fn resolve(&self, from: Option<&str>, link: &Link) -> Option<String> {
         let relative_first = link.kind == LinkKind::Markdown;
         self.resolve_path(from, &link.target, relative_first)
@@ -567,7 +566,7 @@ impl Index {
     }
 
     /// Links that resolve to nothing, grouped by what they ask for
-    /// (lowercased, the way Obsidian merges `[[idea]]` and `[[Idea]]`).
+    /// (lowercased, so `[[idea]]` and `[[Idea]]` are one entry).
     pub fn unresolved(&self) -> BTreeMap<String, Vec<Backlink<'_>>> {
         let mut out: BTreeMap<String, Vec<Backlink>> = BTreeMap::new();
         for (source, note) in self.documents() {
@@ -585,7 +584,7 @@ impl Index {
 
     /// Tag → number of notes carrying it. Tags are case-insensitive; each
     /// is shown in the casing first met. Nested tags count toward their
-    /// parents too (`#a/b` is also `#a`), as Obsidian's tag pane shows them.
+    /// parents too (`#a/b` is also `#a`).
     pub fn tags(&self) -> Vec<(String, usize)> {
         let mut counts: BTreeMap<String, (String, usize)> = BTreeMap::new();
         for (_, note) in self.documents() {
@@ -773,8 +772,8 @@ fn entry_from_bytes(rel: &str, bytes: &[u8], mtime: u64, size: u64) -> Entry {
 }
 
 /// Every visible file under `dir`, as (vault-relative path, absolute path).
-/// Hidden files and folders (`.obsidian`, `.trash`, `.git`) are skipped the
-/// way Obsidian skips them. Symlinks are followed; walkdir breaks loops.
+/// Hidden files and folders (`.cce`, `.trash`, `.git`) are skipped.
+/// Symlinks are followed; walkdir breaks loops.
 fn walk(root: &Path, dir: &Path) -> io::Result<Vec<(String, PathBuf)>> {
     let mut out = Vec::new();
     let walker = walkdir::WalkDir::new(dir)
@@ -799,7 +798,7 @@ fn walk(root: &Path, dir: &Path) -> io::Result<Vec<(String, PathBuf)>> {
     Ok(out)
 }
 
-/// Any component starting with `.` (`.obsidian`, `.trash`): not indexed.
+/// Any component starting with `.` (`.cce`, `.trash`): not indexed.
 fn is_hidden(rel: &str) -> bool {
     rel.split('/').any(|c| c.starts_with('.'))
 }
@@ -878,7 +877,7 @@ mod tests {
             ("a/Only.md", ""),
             ("img/pic.png", ""),
             ("Board.canvas", "{\"nodes\":[],\"edges\":[]}"),
-            (".obsidian/app.json", "{}"),
+            (".cce/vault.kdl", ""),
             ("b/Linker.md", ""),
         ]);
         assert_eq!(resolve(&ix, "b/Linker.md", "alpha").as_deref(), Some("Alpha.md"));
@@ -949,7 +948,7 @@ mod tests {
         assert_eq!(ix.backlinks("B.md").len(), 2);
 
         // Unchanged files and hidden paths are no-ops.
-        let ch = ix.apply_changes(&[dir.path().join("A.md"), dir.path().join(".obsidian/x.json")]);
+        let ch = ix.apply_changes(&[dir.path().join("A.md"), dir.path().join(".trash/x.md")]);
         assert!(ch.is_empty());
     }
 

@@ -1,43 +1,41 @@
-//! Daily notes, compatible with Obsidian's core plugin: the folder, file
-//! name format and template come from `.obsidian/daily-notes.json`, and the
-//! format is a moment.js format string (`YYYY-MM-DD`, `YYYY/MM/DD dddd`),
-//! so a vault shared with Obsidian finds the same file for the same day.
+//! Daily notes: the folder, file name format and template come from the
+//! vault's settings (`daily { … }` in `.cce/vault.kdl`, see
+//! [`crate::settings`]). The format is a moment.js format string
+//! (`YYYY-MM-DD`, `YYYY/MM/DD dddd`), the form vaults have always named
+//! their days with, so an existing vault finds the same file for the same
+//! day.
 //!
-//! Templates expand the core Templates plugin's variables: `{{title}}`,
-//! `{{date}}`, `{{time}}`, and `{{date:FORMAT}}` / `{{time:FORMAT}}`.
+//! Templates expand `{{title}}`, `{{date}}`, `{{time}}`, and
+//! `{{date:FORMAT}}` / `{{time:FORMAT}}`.
 
 use chrono::{Datelike, Local, NaiveDate, NaiveDateTime, Timelike};
-use serde::Deserialize;
-
 use crate::index::{FileKind, Index};
+use crate::settings::Settings;
 use crate::write::WriteError;
 
 pub const DEFAULT_FORMAT: &str = "YYYY-MM-DD";
 
-#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct DailyConfig {
-    #[serde(default)]
     pub folder: String,
-    #[serde(default)]
     pub format: String,
-    #[serde(default)]
     pub template: String,
 }
 
 impl DailyConfig {
-    /// Obsidian's settings for this vault, or its defaults (vault root,
-    /// `YYYY-MM-DD`, no template) when there are none.
+    /// This vault's daily-note settings, or the defaults (vault root,
+    /// `YYYY-MM-DD`, no template) for any it does not set.
     pub fn load(index: &Index) -> DailyConfig {
-        let mut cfg: DailyConfig = index
-            .read_text(".obsidian/daily-notes.json")
-            .ok()
-            .and_then(|t| serde_json::from_str(&t).ok())
-            .unwrap_or_default();
-        cfg.folder = cfg.folder.trim().trim_matches('/').to_string();
-        if cfg.format.trim().is_empty() {
-            cfg.format = DEFAULT_FORMAT.to_string();
+        DailyConfig::from_settings(&Settings::load(index))
+    }
+
+    pub fn from_settings(s: &Settings) -> DailyConfig {
+        let format = s.daily_format.trim();
+        DailyConfig {
+            folder: s.daily_folder.trim().trim_matches('/').to_string(),
+            format: if format.is_empty() { DEFAULT_FORMAT.to_string() } else { format.to_string() },
+            template: s.daily_template.clone(),
         }
-        cfg
     }
 
     /// The vault path of `date`'s note.
@@ -187,8 +185,8 @@ fn token(at: &NaiveDateTime, d: NaiveDate, tok: &str) -> String {
         "do" => ordinal(dow),
         "d" | "e" => dow.to_string(),
         "E" => d.weekday().number_from_monday().to_string(),
-        // Locale weeks (`w`) are taken as ISO weeks, which is what an
-        // en-GB or ISO-configured Obsidian shows.
+        // Locale weeks (`w`) are taken as ISO weeks, as moment.js gives
+        // them in an en-GB or ISO locale.
         "WW" | "ww" => format!("{:02}", week.week()),
         "Wo" | "wo" => ordinal(week.week()),
         "W" | "w" => week.week().to_string(),
@@ -238,13 +236,13 @@ mod tests {
     }
 
     #[test]
-    fn daily_note_from_obsidian_settings() {
+    fn daily_note_from_the_vault_settings() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
-        std::fs::create_dir_all(root.join(".obsidian")).unwrap();
+        std::fs::create_dir_all(root.join(".cce")).unwrap();
         std::fs::write(
-            root.join(".obsidian/daily-notes.json"),
-            r#"{"folder":"Journal/","format":"YYYY/MM-DD ddd","template":"Templates/Day"}"#,
+            root.join(".cce/vault.kdl"),
+            "daily {\n    folder \"Journal/\"\n    format \"YYYY/MM-DD ddd\"\n    template \"Templates/Day\"\n}\n",
         )
         .unwrap();
         std::fs::create_dir_all(root.join("Templates")).unwrap();
@@ -259,8 +257,18 @@ mod tests {
         );
         assert!(!ix.daily(day, true).unwrap().1);
         // The new note's link is indexed. (The template's own
-        // `[[{{date:…}}]]` is a note too, and unresolved, as in Obsidian.)
+        // `[[{{date:…}}]]` is a note too, and unresolved.)
         assert!(ix.unresolved().contains_key("2026-w40"));
+    }
+
+    #[test]
+    fn obsidian_settings_are_no_longer_read() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".obsidian")).unwrap();
+        std::fs::write(dir.path().join(".obsidian/daily-notes.json"), r#"{"folder":"Old"}"#).unwrap();
+        let mut ix = Index::open(dir.path(), false).unwrap();
+        let day = NaiveDate::from_ymd_opt(2026, 1, 2).unwrap();
+        assert_eq!(ix.daily(day, false).unwrap().0, "2026-01-02.md");
     }
 
     #[test]
