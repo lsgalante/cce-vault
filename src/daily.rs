@@ -38,6 +38,21 @@ impl DailyConfig {
         }
     }
 
+    /// The day whose daily note is at `path`, if it is one: a date within
+    /// three years of `around` whose note would be at this path. (A
+    /// moment.js format cannot always be read backwards, so the days are
+    /// tried; it takes well under a millisecond.)
+    pub fn date_of(&self, path: &str, around: NaiveDate) -> Option<NaiveDate> {
+        let in_folder = if self.folder.is_empty() { true } else { path.starts_with(&format!("{}/", self.folder)) };
+        if !in_folder || !path.ends_with(".md") {
+            return None;
+        }
+        (0..=3 * 366i64)
+            .flat_map(|n| [n, -n])
+            .filter_map(|n| around.checked_add_signed(chrono::Duration::days(n)))
+            .find(|d| self.path_for(*d) == path)
+    }
+
     /// The vault path of `date`'s note.
     pub fn path_for(&self, date: NaiveDate) -> String {
         let name = format_moment(&date.and_hms_opt(0, 0, 0).unwrap(), &self.format);
@@ -269,6 +284,18 @@ mod tests {
         let mut ix = Index::open(dir.path(), false).unwrap();
         let day = NaiveDate::from_ymd_opt(2026, 1, 2).unwrap();
         assert_eq!(ix.daily(day, false).unwrap().0, "2026-01-02.md");
+    }
+
+    #[test]
+    fn a_daily_notes_date_is_found_from_its_path() {
+        let cfg = DailyConfig { folder: "Journal".into(), format: "YYYY/MM-DD ddd".into(), template: String::new() };
+        let today = NaiveDate::from_ymd_opt(2026, 10, 13).unwrap();
+        let day = NaiveDate::from_ymd_opt(2025, 2, 28).unwrap();
+        assert_eq!(cfg.date_of(&cfg.path_for(day), today), Some(day));
+        assert_eq!(cfg.date_of("Journal/notes.md", today), None);
+        assert_eq!(cfg.date_of("Elsewhere/2026/10-13 Tue.md", today), None);
+        let plain = DailyConfig { folder: String::new(), format: DEFAULT_FORMAT.into(), template: String::new() };
+        assert_eq!(plain.date_of("2026-10-14.md", today), NaiveDate::from_ymd_opt(2026, 10, 14));
     }
 
     #[test]

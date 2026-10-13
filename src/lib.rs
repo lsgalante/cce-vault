@@ -15,6 +15,7 @@
 //! - [`canvas`]: JSON Canvas read and write, byte-exact with the files.
 //! - [`daily`]: daily notes from the vault's settings and templates.
 //! - [`settings`]: the vault's settings, `.cce/vault.kdl`.
+//! - [`agenda`]: a note's ```` ```agenda ```` blocks, filled when drawn.
 //! - [`markdown`]: a note as styled blocks and spans, for reading views.
 //! - [`config`]: where the vault is (`CCE_VAULT`, or `vault { path }` in
 //!   `~/.config/cce/config.kdl`).
@@ -33,6 +34,7 @@
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 
+pub mod agenda;
 pub mod attachments;
 pub mod canvas;
 pub mod config;
