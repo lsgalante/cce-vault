@@ -3,8 +3,8 @@
 The notes vault shared by cce apps: a folder of Markdown notes (wikilinks,
 embeds, `#tags`, frontmatter, `- [ ]` tasks), JSON Canvas boards and
 attachments, with its settings in `.cce/vault.kdl`. This crate is
-everything about that folder that is not UI; `cce-notes`, `cce-graph`,
-`cce-grid`, `cce-list`, `cce-vault-web` and cce-sync's MCP tools sit on it.
+everything about that folder that is not UI; `cce-notes`, `cce-graph`, `cce-calendar`,
+`cce-grid`, `cce-vault-web` and cce-sync's MCP tools sit on it.
 The vault started as an Obsidian vault and the syntax stays (old notes stay
 valid), but Obsidian is no longer a client: the rules below are this
 crate's own spec, and nothing reads or writes `.obsidian/`.
