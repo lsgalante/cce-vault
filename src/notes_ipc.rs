@@ -4,7 +4,7 @@
 //! cce-notes listens on `/tmp/cce-notes-<WAYLAND_DISPLAY>.sock` (cce-core's
 //! `ipc::instance`), one request line in, one reply line out. The grammar is
 //! spelled here, beside the vault the notes come from, because three apps
-//! send it besides cce-notes' own later launches: cce-graph, cce-grid and
+//! send it besides cce-notes' own later launches: cce-graph, cce-desktop and
 //! cce-list each kept a hand-written copy of the `open` line and its
 //! fallback until 2026-10-10, and one of them waited for the reply on the UI
 //! thread with no deadline.

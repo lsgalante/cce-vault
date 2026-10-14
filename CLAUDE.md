@@ -4,7 +4,7 @@ The notes vault shared by cce apps: a folder of Markdown notes (wikilinks,
 embeds, `#tags`, frontmatter, `- [ ]` tasks), JSON Canvas boards and
 attachments, with its settings in `.cce/vault.kdl`. This crate is
 everything about that folder that is not UI; `cce-notes`, `cce-graph`, `cce-calendar`,
-`cce-grid`, `cce-vault-web` and cce-sync's MCP tools sit on it.
+`cce-desktop`, `cce-vault-web` and cce-sync's MCP tools sit on it.
 The vault started as an Obsidian vault and the syntax stays (old notes stay
 valid), but Obsidian is no longer a client: the rules below are this
 crate's own spec, and nothing reads or writes `.obsidian/`.
@@ -31,7 +31,7 @@ batches on its own event loop. The files are the source of truth.
 | `events` | Notes about calendar events: found by their `event: <calendar>/<id>` property (`note_for`, wherever the note moved), made as `Meetings/<date> <title>.md` (`create_note`) |
 | `agenda` | A note's ```` ```agenda ```` blocks: which day each asks for (a date in the block, else the daily note's own, `DailyConfig::date_of`) and filling them with lines after parsing, so no line moves. The lines come from cce-sync's Google bridge; the file keeps the block empty |
 | `config` | The vault root: `--vault`, `$CCE_VAULT`, then `vault { path "…" }` in `~/.config/cce/config.kdl` |
-| `notes_ipc` | The cce-notes instance protocol (`open`/`daily`/`search`/`show`, the `current`/`vault` queries) and `open`, the bounded off-thread hand-off cce-graph, cce-grid and cce-list use (unix only; on cce-core's socket convention) |
+| `notes_ipc` | The cce-notes instance protocol (`open`/`daily`/`search`/`show`, the `current`/`vault` queries) and `open`, the bounded off-thread hand-off cce-graph, cce-desktop and cce-list use (unix only; on cce-core's socket convention) |
 | `main.rs` | The `cce-vault` CLI (`cce-vault --help`) |
 
 ## Invariants — each was a design decision, keep them
