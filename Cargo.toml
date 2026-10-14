@@ -17,7 +17,7 @@ path = "src/main.rs"
 # The socket convention and spawn_detached / de_bin, for the cce-notes
 # protocol (`notes_ipc`); GUI-free, without the config. `markdown`: the
 # reading view, frontmatter properties and the leaf rules the index shares.
-cce-core = { git = "https://github.com/lsgalante/cce-core.git", rev = "2c8855460e2cbe4d5e90d095daebc4ad30c94b80", default-features = false, features = ["markdown"] }
+cce-core = { git = "https://github.com/lsgalante/cce-core.git", rev = "6333e4da15b5daa241919df1b057c94e52246391", default-features = false, features = ["markdown"] }
 chrono = { version = "0.4.45", features = ["serde"] }
 # Only for its `serde` feature: `parse::Properties` (cce_core::markdown) is an
 # IndexMap, and `Note` serializes it.
