@@ -23,7 +23,7 @@ batches on its own event loop. The files are the source of truth.
 | `index` | Every file, link resolution, backlinks, unresolved links, tags, tasks; the optional parse cache; the in-memory mode (`Index::in_memory`) |
 | `watch` | Recursive `notify` watcher, debounced (150 ms quiet, 1 s cap), hidden paths dropped |
 | `search` | Fuzzy names (quick switcher), full-text scan, unlinked mentions |
-| `write` | `atomic_write`, create/append, `set_task`, `rename` with link rewrite |
+| `write` | `atomic_write`, create/append, `append_under` (the end of a heading's section; cce-sync's and cce-notes' MCP `append_note`), `set_task`, `rename` with link rewrite |
 | `canvas` | JSON Canvas as `serde_json::Value`, written byte-exact in the files' layout |
 | `settings` | The vault's settings, `.cce/vault.kdl`: `daily { folder format template }`, `attachments { folder }`, `templates { folder }` |
 | `daily` | Daily notes from `daily { … }` in the settings; moment.js formats; template variables |

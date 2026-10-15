@@ -20,6 +20,7 @@ pub enum WriteError {
     Exists(String),
     InvalidPath(String),
     NoTask { path: String, line: usize },
+    NoHeading { path: String, heading: String },
     Canvas(String),
     Io(io::Error),
 }
@@ -31,6 +32,7 @@ impl std::fmt::Display for WriteError {
             WriteError::Exists(p) => write!(f, "already exists: {p}"),
             WriteError::InvalidPath(p) => write!(f, "not a usable vault path: {p}"),
             WriteError::NoTask { path, line } => write!(f, "{path}:{}: no task on that line", line + 1),
+            WriteError::NoHeading { path, heading } => write!(f, "{path} has no heading \"{heading}\""),
             WriteError::Canvas(e) => write!(f, "{e}"),
             WriteError::Io(e) => write!(f, "{e}"),
         }
@@ -228,6 +230,43 @@ impl Index {
             body.push('\n');
         }
         self.store(&rel, body.as_bytes())?;
+        self.refresh(&[rel]);
+        Ok(())
+    }
+
+    /// Append a block to the end of the section under `heading` (matched
+    /// without its `#`s or case), before the blank lines that close it; to
+    /// the end of the note, created if missing, when `heading` is `None`.
+    /// A heading the note does not have is an error, not a new section.
+    pub fn append_under(&mut self, path: &str, text: &str, heading: Option<&str>) -> Result<(), WriteError> {
+        let Some(heading) = heading else { return self.append(path, text) };
+        let rel = check_new_path(path)?;
+        let body = match self.read_text(&rel) {
+            Ok(t) => t,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => String::new(),
+            Err(e) => return Err(e.into()),
+        };
+        let want = heading.trim().trim_start_matches('#').trim().to_lowercase();
+        let note = crate::parse::parse(&body);
+        let Some(h) = note.headings.iter().find(|h| h.text.trim().to_lowercase() == want) else {
+            return Err(WriteError::NoHeading { path: rel, heading: heading.to_string() });
+        };
+        let next = note.headings.iter().find(|n| n.line > h.line && n.level <= h.level).map(|n| n.line);
+        let mut lines: Vec<&str> = body.split_inclusive('\n').collect();
+        let mut at = next.unwrap_or(lines.len());
+        while at > h.line + 1 && lines[at - 1].trim().is_empty() {
+            at -= 1;
+        }
+        let mut block = text.to_string();
+        if !block.ends_with('\n') {
+            block.push('\n');
+        }
+        if at > 0 && !lines[at - 1].ends_with('\n') {
+            block.insert(0, '\n');
+        }
+        lines.insert(at, &block);
+        let edited = lines.concat();
+        self.store(&rel, edited.as_bytes())?;
         self.refresh(&[rel]);
         Ok(())
     }
@@ -636,6 +675,23 @@ mod tests {
 
     fn read(dir: &tempfile::TempDir, path: &str) -> String {
         std::fs::read_to_string(dir.path().join(path)).unwrap()
+    }
+
+    #[test]
+    fn append_under_lands_at_the_end_of_its_section() {
+        let (dir, mut ix) = vault(&[("Plan.md", "# Plan\n\n## Tasks\n- [ ] a\n\n## Notes\nx\n")]);
+        ix.append_under("Plan.md", "- [ ] b", Some("tasks")).unwrap();
+        assert_eq!(read(&dir, "Plan.md"), "# Plan\n\n## Tasks\n- [ ] a\n- [ ] b\n\n## Notes\nx\n");
+        // The last section runs to the end of the note.
+        ix.append_under("Plan.md", "y", Some("## Notes")).unwrap();
+        assert!(read(&dir, "Plan.md").ends_with("## Notes\nx\ny\n"));
+        assert!(matches!(
+            ix.append_under("Plan.md", "z", Some("Missing")),
+            Err(WriteError::NoHeading { ref heading, .. }) if heading == "Missing"
+        ));
+        // No heading: the plain append, which creates the note.
+        ix.append_under("New.md", "first", None).unwrap();
+        assert_eq!(read(&dir, "New.md"), "first\n");
     }
 
     #[test]
